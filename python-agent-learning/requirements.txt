@@ -1,0 +1,12 @@
+langchain==0.3.30
+langchain-core==0.3.86
+langchain-text-splitters==0.3.11
+langchain-openai==0.3.35
+langgraph==0.6.11
+pydantic==2.13.4
+python-dotenv==1.2.1
+fastapi==0.124.2
+uvicorn==0.38.0
+pytest==9.0.2
+urllib3==1.26.20
+truststore==0.10.4

@@ -1,0 +1,23 @@
+# OS/editor files
+.DS_Store
+
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+
+# Python local environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local generated/demo output
+generated/
+
+# Local tooling and credentials
+.tools/
+
+# Large third-party reference repositories
+open-source-agent-learning/
+
