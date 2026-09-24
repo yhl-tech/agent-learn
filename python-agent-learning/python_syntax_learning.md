@@ -1178,3 +1178,1128 @@ Python 里：
 - 能读懂布尔判断为什么通过或失败。
 - 能把简洁写法还原成普通 `for` 循环。
 - 能区分“模型生成调用请求”和“Python 真正执行工具”。
+
+## 35. 逻辑运算：and、or、not
+
+逻辑运算用于组合多个判断条件。
+
+| Python | JavaScript | 含义 |
+| --- | --- | --- |
+| `a and b` | `a && b` | 两个条件都为真，整体才为真。 |
+| `a or b` | `a || b` | 至少一个条件为真，整体就为真。 |
+| `not a` | `!a` | 对条件取反。 |
+
+在 `07_eval_regression.py` 中：
+
+- `passed = has_expected_source and has_expected_terms`
+
+含义：
+
+| `has_expected_source` | `has_expected_terms` | `passed` |
+| --- | --- | --- |
+| `True` | `True` | `True` |
+| `True` | `False` | `False` |
+| `False` | `True` | `False` |
+| `False` | `False` | `False` |
+
+也就是说：来源命中，并且关键词也命中，这条 Eval 才算通过。
+
+常见例子：
+
+| 代码 | 含义 |
+| --- | --- |
+| `if user and user.is_active:` | 用户存在，并且用户是活跃状态。 |
+| `if error or not result:` | 有错误，或者没有结果。 |
+| `if not os.getenv("OPENAI_API_KEY"):` | 没有配置模型 Key。 |
+
+## 36. 比较运算：==、!=、is、is not
+
+比较运算用于判断两个值之间的关系。
+
+| Python | JavaScript | 含义 |
+| --- | --- | --- |
+| `a == b` | `a === b` | 值是否相等。 |
+| `a != b` | `a !== b` | 值是否不相等。 |
+| `a > b` | `a > b` | 是否大于。 |
+| `a >= b` | `a >= b` | 是否大于等于。 |
+| `a < b` | `a < b` | 是否小于。 |
+| `a <= b` | `a <= b` | 是否小于等于。 |
+
+`is` 用来判断是不是同一个对象，最常见用法是判断 `None`：
+
+| 推荐写法 | 不推荐写法 | 说明 |
+| --- | --- | --- |
+| `if value is None:` | `if value == None:` | 判断是否没有值。 |
+| `if value is not None:` | `if value != None:` | 判断是否有值。 |
+
+为什么判断 `None` 推荐用 `is`：
+
+- `None` 是 Python 中表示“没有值”的特殊单例对象。
+- `value is None` 的语义更准确。
+- 这也是 Python 社区最常见写法。
+
+注意：
+
+- 判断普通数字、字符串是否相等，用 `==`。
+- 判断是否是 `None`，用 `is None`。
+
+## 37. try / except / finally 异常处理
+
+异常处理用于防止程序因为某一步失败而直接崩溃。
+
+基本结构：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `try:` |
+| 2 | `····result = risky_operation()` |
+| 3 | `except Exception as error:` |
+| 4 | `····print(f"执行失败：{error}")` |
+
+含义：
+
+- `try`：尝试执行可能失败的代码。
+- `except`：如果 `try` 里的代码报错，就进入这里。
+- `Exception as error`：把错误对象保存到变量 `error`。
+
+在 `08_human_approval_file_writer.py` 中：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `try:` |
+| 2 | `····draft = parse_draft(raw_result)` |
+| 3 | `except Exception as error:` |
+| 4 | `····print(f"文件草稿解析失败：{type(error).__name__}: {error}")` |
+| 5 | `····continue` |
+
+含义：
+
+- 如果 `parse_draft(raw_result)` 成功，就得到 `draft`。
+- 如果 JSON 不合法或字段不符合要求，就打印错误，并跳过当前工具调用。
+
+`finally` 表示无论成功还是失败都会执行：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `try:` |
+| 2 | `····print("执行主要逻辑")` |
+| 3 | `except Exception as error:` |
+| 4 | `····print(error)` |
+| 5 | `finally:` |
+| 6 | `····print("收尾逻辑")` |
+
+常见用途：
+
+- 关闭文件。
+- 释放连接。
+- 打印收尾日志。
+
+## 38. with 上下文管理器
+
+`with` 用于管理需要“打开后关闭”的资源，比如文件、网络连接、锁。
+
+文件读取常见写法：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `with open("README.md", "r", encoding="utf-8") as file:` |
+| 2 | `····content = file.read()` |
+
+含义：
+
+- `open(...)` 打开文件。
+- `as file` 把打开后的文件对象命名为 `file`。
+- 缩进块执行完后，Python 自动关闭文件。
+
+不用 `with` 时，需要自己关闭：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `file = open("README.md", "r", encoding="utf-8")` |
+| 2 | `content = file.read()` |
+| 3 | `file.close()` |
+
+推荐使用 `with`，因为即使中间出错，也更容易保证文件被关闭。
+
+在当前项目中，很多地方使用 `Path.read_text()` 和 `Path.write_text()`，它们把常见文件读写封装得更简单，所以不一定需要直接写 `with open(...)`。
+
+## 39. Path 常见文件操作
+
+`Path` 来自标准库 `pathlib`，用于处理文件路径。
+
+| 代码 | 含义 |
+| --- | --- |
+| `path = Path("data/kb/button.md")` | 创建一个路径对象。 |
+| `path.exists()` | 判断路径是否存在。 |
+| `path.is_file()` | 判断是否是文件。 |
+| `path.is_dir()` | 判断是否是目录。 |
+| `path.parent` | 获取父目录。 |
+| `path.name` | 获取文件名。 |
+| `path.suffix` | 获取后缀名，例如 `.md`。 |
+| `path.read_text(encoding="utf-8")` | 读取文本文件内容。 |
+| `path.write_text(content, encoding="utf-8")` | 写入文本文件内容。 |
+| `path.mkdir(parents=True, exist_ok=True)` | 创建目录，父目录不存在也一起创建。 |
+| `path.resolve()` | 转成规范化绝对路径。 |
+
+在 `08_human_approval_file_writer.py` 中：
+
+- `target_path.parent.mkdir(parents=True, exist_ok=True)`
+- `target_path.write_text(draft.content, encoding="utf-8")`
+
+含义：
+
+1. 先确保目标文件所在目录存在。
+2. 再把内容写入目标文件。
+
+注意：
+
+- `write_text()` 会真正修改磁盘文件。
+- 所以项目里在写文件前加了人工确认和路径安全检查。
+
+## 40. 函数参数：默认参数、关键字参数、*args、**kwargs
+
+函数参数有几种常见形式。
+
+普通参数：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def add(a, b):` |
+| 2 | `····return a + b` |
+
+调用：
+
+- `add(1, 2)`
+
+默认参数：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def greet(name, prefix="你好"):` |
+| 2 | `····return f"{prefix}，{name}"` |
+
+调用：
+
+| 代码 | 结果 |
+| --- | --- |
+| `greet("Tom")` | `你好，Tom` |
+| `greet("Tom", prefix="Hello")` | `Hello，Tom` |
+
+关键字参数：
+
+- `greet(name="Tom", prefix="Hello")`
+
+优点：
+
+- 调用时更清楚每个值传给哪个参数。
+- 参数顺序不容易搞错。
+
+`*args` 表示接收任意数量的位置参数：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def show_args(*args):` |
+| 2 | `····print(args)` |
+
+调用：
+
+- `show_args(1, 2, 3)`
+- `args` 会是 `(1, 2, 3)`
+
+`**kwargs` 表示接收任意数量的关键字参数：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def show_kwargs(**kwargs):` |
+| 2 | `····print(kwargs)` |
+
+调用：
+
+- `show_kwargs(name="Tom", age=18)`
+- `kwargs` 会是 `{"name": "Tom", "age": 18}`
+
+学习阶段先掌握普通参数、默认参数、关键字参数即可。
+
+## 41. return、break、continue、pass
+
+这几个关键字都用于控制代码执行流程。
+
+| 关键字 | 含义 | 常见位置 |
+| --- | --- | --- |
+| `return` | 从函数返回结果，并结束函数。 | 函数内部。 |
+| `break` | 结束当前循环。 | `for` / `while` 循环内部。 |
+| `continue` | 跳过本轮循环，进入下一轮。 | `for` / `while` 循环内部。 |
+| `pass` | 什么都不做，占位用。 | 函数、类、if 分支内部。 |
+
+`return` 示例：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def is_even(number):` |
+| 2 | `····return number % 2 == 0` |
+
+`break` 示例：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `for number in [1, 2, 3, 4]:` |
+| 2 | `····if number == 3:` |
+| 3 | `········break` |
+| 4 | `····print(number)` |
+
+输出：
+
+- `1`
+- `2`
+
+`continue` 示例：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `for number in [1, 2, 3, 4]:` |
+| 2 | `····if number == 3:` |
+| 3 | `········continue` |
+| 4 | `····print(number)` |
+
+输出：
+
+- `1`
+- `2`
+- `4`
+
+`pass` 示例：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def todo_function():` |
+| 2 | `····pass` |
+
+含义：先占一个位置，后续再实现。
+
+## 42. range、enumerate、zip
+
+这三个函数经常和 `for` 循环一起使用。
+
+`range()` 用来生成数字序列：
+
+| 代码 | 产生的值 |
+| --- | --- |
+| `range(3)` | `0`、`1`、`2` |
+| `range(1, 4)` | `1`、`2`、`3` |
+| `range(0, 6, 2)` | `0`、`2`、`4` |
+
+示例：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `for index in range(3):` |
+| 2 | `····print(index)` |
+
+`enumerate()` 用来同时拿到索引和值：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `items = ["a", "b", "c"]` |
+| 2 | `for index, item in enumerate(items):` |
+| 3 | `····print(index, item)` |
+
+输出：
+
+| index | item |
+| --- | --- |
+| `0` | `a` |
+| `1` | `b` |
+| `2` | `c` |
+
+`zip()` 用来同时遍历多个列表：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `names = ["Tom", "Jerry"]` |
+| 2 | `ages = [18, 20]` |
+| 3 | `for name, age in zip(names, ages):` |
+| 4 | `····print(name, age)` |
+
+输出：
+
+| name | age |
+| --- | --- |
+| `Tom` | `18` |
+| `Jerry` | `20` |
+
+## 43. 切片和索引
+
+索引用于读取单个元素，切片用于读取一段元素。
+
+假设：
+
+- `items = ["a", "b", "c", "d", "e"]`
+
+索引：
+
+| 代码 | 结果 |
+| --- | --- |
+| `items[0]` | `"a"` |
+| `items[1]` | `"b"` |
+| `items[-1]` | `"e"` |
+| `items[-2]` | `"d"` |
+
+切片：
+
+| 代码 | 结果 |
+| --- | --- |
+| `items[0:3]` | `["a", "b", "c"]` |
+| `items[:3]` | `["a", "b", "c"]` |
+| `items[2:]` | `["c", "d", "e"]` |
+| `items[1:4]` | `["b", "c", "d"]` |
+| `items[:]` | 复制整个列表。 |
+
+规律：
+
+- `items[start:end]` 包含 `start`，不包含 `end`。
+- `items[0:3]` 取索引 `0`、`1`、`2`。
+- 负数索引从末尾开始数。
+
+字符串也支持索引和切片：
+
+| 代码 | 结果 |
+| --- | --- |
+| `"hello"[0]` | `"h"` |
+| `"hello"[:2]` | `"he"` |
+
+## 44. 元组 tuple 和解包
+
+元组和列表类似，也能保存多个值，但通常用于表示固定结构的数据。
+
+| 类型 | 示例 | 是否常修改 |
+| --- | --- | --- |
+| `list` | `[1, 2, 3]` | 常用于可变列表。 |
+| `tuple` | `(1, 2, 3)` | 常用于固定组合。 |
+
+元组示例：
+
+- `point = (10, 20)`
+
+读取：
+
+| 代码 | 结果 |
+| --- | --- |
+| `point[0]` | `10` |
+| `point[1]` | `20` |
+
+解包语法：
+
+| 代码 | 含义 |
+| --- | --- |
+| `x, y = point` | 把 `point` 里的两个值分别赋给 `x` 和 `y`。 |
+
+函数可以返回多个值，本质上通常是返回一个元组：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def get_user():` |
+| 2 | `····return "Tom", 18` |
+| 3 | `name, age = get_user()` |
+
+执行后：
+
+| 变量 | 值 |
+| --- | --- |
+| `name` | `"Tom"` |
+| `age` | `18` |
+
+在循环中也常见解包：
+
+- `for index, item in enumerate(items):`
+- `for name, age in zip(names, ages):`
+
+## 45. 列表常用方法
+
+列表常用方法如下。
+
+| 方法 | 示例 | 含义 |
+| --- | --- | --- |
+| `append()` | `items.append("a")` | 在末尾追加一个元素。 |
+| `extend()` | `items.extend(["b", "c"])` | 把另一个列表的元素追加进来。 |
+| `remove()` | `items.remove("a")` | 删除第一个匹配的元素。 |
+| `pop()` | `items.pop()` | 删除并返回最后一个元素。 |
+| `sort()` | `items.sort()` | 原地排序，会修改原列表。 |
+| `count()` | `items.count("a")` | 统计某个元素出现次数。 |
+| `index()` | `items.index("a")` | 查找某个元素的索引。 |
+
+`sorted(items)` 和 `items.sort()` 的区别：
+
+| 写法 | 是否修改原列表 | 返回值 |
+| --- | --- | --- |
+| `sorted(items)` | 不修改 | 返回新列表。 |
+| `items.sort()` | 修改原列表 | 返回 `None`。 |
+
+学习阶段建议：
+
+- 想保留原列表，用 `sorted(items)`。
+- 明确要修改原列表，用 `items.sort()`。
+
+## 46. 字典常用方法
+
+字典常用方法如下。
+
+| 方法 | 示例 | 含义 |
+| --- | --- | --- |
+| `get()` | `user.get("name")` | 获取 key 对应的值，不存在时返回 `None`。 |
+| `keys()` | `user.keys()` | 获取所有 key。 |
+| `values()` | `user.values()` | 获取所有 value。 |
+| `items()` | `user.items()` | 获取所有 key-value 对。 |
+| `update()` | `user.update({"age": 18})` | 更新字典。 |
+| `pop()` | `user.pop("name")` | 删除 key，并返回对应 value。 |
+
+遍历字典 key：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `for key in user:` |
+| 2 | `····print(key)` |
+
+遍历 key 和 value：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `for key, value in user.items():` |
+| 2 | `····print(key, value)` |
+
+和 JavaScript 对照：
+
+| Python | JavaScript |
+| --- | --- |
+| `user.keys()` | `Object.keys(user)` |
+| `user.values()` | `Object.values(user)` |
+| `user.items()` | `Object.entries(user)` |
+
+## 47. json.dumps 和 json.loads
+
+`json` 是 Python 标准库，用于处理 JSON 数据。
+
+常见导入：
+
+- `import json`
+
+`json.dumps()`：把 Python 数据转成 JSON 字符串。
+
+| 代码 | 含义 |
+| --- | --- |
+| `json.dumps({"name": "Tom"})` | 转成 JSON 字符串。 |
+| `json.dumps(data, ensure_ascii=False)` | 中文不要转成 Unicode 转义。 |
+| `json.dumps(data, indent=2)` | 输出更容易阅读的缩进格式。 |
+
+`json.loads()`：把 JSON 字符串转成 Python 数据。
+
+| 代码 | 含义 |
+| --- | --- |
+| `json.loads(raw_text)` | 把 JSON 字符串解析成字典或列表。 |
+
+在 `08_human_approval_file_writer.py` 中：
+
+- `json.dumps({...}, ensure_ascii=False, indent=2)`
+
+含义：
+
+1. 工具函数返回的是字符串。
+2. 但字符串内容是标准 JSON。
+3. 后面可以用 Pydantic 的 `model_validate_json()` 解析并校验。
+
+和 JavaScript 对照：
+
+| Python | JavaScript | 含义 |
+| --- | --- | --- |
+| `json.dumps(data)` | `JSON.stringify(data)` | 对象转 JSON 字符串。 |
+| `json.loads(text)` | `JSON.parse(text)` | JSON 字符串转对象。 |
+
+## 48. os.getenv 和环境变量
+
+环境变量常用于保存配置和敏感信息，例如 API Key。
+
+常见导入：
+
+- `import os`
+
+读取环境变量：
+
+| 代码 | 含义 |
+| --- | --- |
+| `os.getenv("OPENAI_API_KEY")` | 读取模型 Key。 |
+| `os.getenv("OPENAI_MODEL", "gpt-4o-mini")` | 没有配置时使用默认值。 |
+
+在当前项目中：
+
+- `bool(os.getenv("OPENAI_API_KEY"))`
+
+含义：
+
+- 如果环境变量存在且不是空字符串，结果是 `True`。
+- 如果没配置，结果是 `False`。
+
+常见判断：
+
+| 代码 | 含义 |
+| --- | --- |
+| `if not os.getenv("OPENAI_API_KEY"):` | 没有配置 Key。 |
+| `if os.getenv("OPENAI_API_KEY"):` | 已经配置 Key。 |
+
+为什么 API Key 放环境变量：
+
+- 避免写死在代码里。
+- 避免提交到 Git。
+- 不同环境可以使用不同配置。
+
+## 49. import 的几种写法
+
+`import` 用于导入模块或模块里的对象。
+
+普通导入：
+
+| 代码 | 使用方式 |
+| --- | --- |
+| `import os` | `os.getenv("OPENAI_API_KEY")` |
+| `import json` | `json.dumps(data)` |
+
+从模块导入具体对象：
+
+| 代码 | 使用方式 |
+| --- | --- |
+| `from pathlib import Path` | `Path("README.md")` |
+| `from dataclasses import dataclass` | `@dataclass` |
+
+起别名：
+
+| 代码 | 使用方式 |
+| --- | --- |
+| `import pandas as pd` | `pd.DataFrame(...)` |
+| `import numpy as np` | `np.array(...)` |
+
+动态导入：
+
+| 代码 | 含义 |
+| --- | --- |
+| `import importlib` | 导入动态导入模块。 |
+| `rag_module = importlib.import_module("04_rag_qa")` | 按字符串导入 `04_rag_qa.py`。 |
+
+为什么当前项目用 `importlib.import_module("04_rag_qa")`：
+
+- 文件名 `04_rag_qa.py` 以数字开头。
+- Python 不能直接写 `import 04_rag_qa`。
+- 所以使用 `importlib` 按字符串导入。
+
+## 50. 普通 class、self、__init__
+
+`class` 用于定义类。类可以理解为一种对象模板。
+
+普通类写法：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `class User:` |
+| 2 | `····def __init__(self, name: str, age: int):` |
+| 3 | `········self.name = name` |
+| 4 | `········self.age = age` |
+
+创建对象：
+
+| 代码 | 含义 |
+| --- | --- |
+| `user = User("Tom", 18)` | 创建一个 `User` 对象。 |
+| `user.name` | 读取对象的 `name` 属性。 |
+| `user.age` | 读取对象的 `age` 属性。 |
+
+`self` 是什么：
+
+- `self` 表示当前这个对象自己。
+- `self.name = name` 表示把参数 `name` 保存到当前对象的 `name` 属性上。
+- 类方法的第一个参数通常都写 `self`。
+
+`__init__` 是什么：
+
+- 创建对象时自动执行的初始化方法。
+- 类似 JavaScript class 里的 `constructor`。
+
+Python 与 JavaScript 对照：
+
+| Python | JavaScript |
+| --- | --- |
+| `class User:` | `class User {}` |
+| `def __init__(self, name):` | `constructor(name) {}` |
+| `self.name = name` | `this.name = name` |
+| `user.name` | `user.name` |
+
+`@dataclass` 和普通 class 的关系：
+
+- 普通 class：需要自己写 `__init__`。
+- `@dataclass`：自动帮你生成 `__init__`。
+- 如果类主要只是保存数据，用 `@dataclass` 更省代码。
+
+## 51. 模块、包和 __name__
+
+一个 `.py` 文件就是一个模块。
+
+例子：
+
+| 文件 | 模块名 |
+| --- | --- |
+| `07_eval_regression.py` | `07_eval_regression` |
+| `08_human_approval_file_writer.py` | `08_human_approval_file_writer` |
+
+包通常是一个目录，里面包含多个模块。
+
+`__name__` 是 Python 自动提供的特殊变量。
+
+| 场景 | `__name__` 的值 |
+| --- | --- |
+| 直接运行当前文件 | `"__main__"` |
+| 被其他文件 import | 模块名。 |
+
+所以常见写法是：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `if __name__ == "__main__":` |
+| 2 | `····main()` |
+
+含义：
+
+- 直接运行这个文件时，执行 `main()`。
+- 被其他文件导入时，不自动执行 `main()`。
+
+为什么这很重要：
+
+- 测试文件 import 练习脚本时，不希望脚本主流程自动运行。
+- 只希望复用里面的函数。
+
+## 52. lambda 匿名函数
+
+`lambda` 用于定义很短的小函数。
+
+普通函数：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def double(x):` |
+| 2 | `····return x * 2` |
+
+`lambda` 写法：
+
+- `double = lambda x: x * 2`
+
+调用：
+
+- `double(3)` 结果是 `6`
+
+常见使用场景：排序时指定 key。
+
+| 代码 | 含义 |
+| --- | --- |
+| `items.sort(key=lambda item: item["score"])` | 按每个元素的 `score` 字段排序。 |
+
+和 JavaScript 对照：
+
+| Python | JavaScript |
+| --- | --- |
+| `lambda x: x * 2` | `(x) => x * 2` |
+
+学习阶段建议：
+
+- 能看懂即可。
+- 复杂逻辑不要硬写 `lambda`，用普通 `def` 更清楚。
+
+## 53. while 循环
+
+`while` 表示只要条件成立，就一直循环。
+
+基本格式：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `count = 0` |
+| 2 | `while count < 3:` |
+| 3 | `····print(count)` |
+| 4 | `····count = count + 1` |
+
+输出：
+
+- `0`
+- `1`
+- `2`
+
+注意：
+
+- `while` 条件一直为真时，会造成死循环。
+- 写 `while` 时要确认循环内部会改变条件。
+
+常见退出方式：
+
+| 代码 | 含义 |
+| --- | --- |
+| `break` | 立即退出循环。 |
+| `continue` | 跳过本轮，进入下一轮。 |
+
+在 Agent 脚本里，`for` 循环更常见；`while` 通常用于命令行交互、轮询、重试等场景。
+
+## 54. assert 断言
+
+`assert` 用来声明“这里应该为真”。
+
+基本写法：
+
+- `assert passed`
+
+如果 `passed` 是 `True`，程序继续执行。
+
+如果 `passed` 是 `False`，程序报 `AssertionError`。
+
+带错误信息：
+
+- `assert passed, "评测应该通过"`
+
+在测试中常见：
+
+| 代码 | 含义 |
+| --- | --- |
+| `assert result == expected` | 检查实际结果是否等于预期结果。 |
+| `assert "source" in metadata` | 检查字典里是否包含 `source`。 |
+| `assert len(results) == 4` | 检查结果数量是否为 4。 |
+
+注意：
+
+- `assert` 适合测试和开发期检查。
+- 生产逻辑里不要把关键业务校验只依赖 `assert`。
+
+## 55. 真实项目源码语法：list(map(lambda ...))
+
+在 MaxKB 源码里看到的这句：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `exit_list = list(` |
+| 2 | `····map(lambda p: exist(request.auth.role_list, request.auth.permission_list, p, request, **kwargs),` |
+| 3 | `········permission))` |
+
+可以先翻译成普通循环：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `exit_list = []` |
+| 2 | `for p in permission:` |
+| 3 | `····result = exist(request.auth.role_list, request.auth.permission_list, p, request, **kwargs)` |
+| 4 | `····exit_list.append(result)` |
+
+含义：
+
+- `permission` 里有多个权限条件。
+- `map(...)` 负责逐个遍历这些权限条件。
+- `lambda p: ...` 表示对每一个权限条件 `p` 执行一次检查。
+- `exist(...)` 负责判断当前用户是否满足这个权限条件。
+- `list(...)` 把所有判断结果收集成列表。
+
+结果可能是：
+
+| 代码 | 含义 |
+| --- | --- |
+| `exit_list = [True, False, False]` | 三个权限条件里，第一个满足。 |
+| `exit_list = [False, False, False]` | 所有权限条件都不满足。 |
+| `exit_list = [True, True, False]` | 前两个权限条件满足。 |
+
+## 56. list 的两种常见用法
+
+`list` 在源码里常见两种形态。
+
+第一种：列表字面量，用 `[]`。
+
+| 代码 | 含义 |
+| --- | --- |
+| `[TokenAuth]` | 一个列表，里面放了 `TokenAuth` 这个类对象。 |
+| `[1, 2, 3]` | 一个列表，里面放了 3 个数字。 |
+| `["read", "write"]` | 一个列表，里面放了 2 个字符串。 |
+
+第二种：`list(...)` 函数，把可迭代对象转换成列表。
+
+| 代码 | 含义 |
+| --- | --- |
+| `list(map(lambda x: x * 2, [1, 2, 3]))` | 得到 `[2, 4, 6]`。 |
+| `list("abc")` | 得到 `["a", "b", "c"]`。 |
+| `list(queryset)` | 把 Django 查询结果转成普通列表。 |
+
+注意：
+
+- `[TokenAuth]` 是直接创建列表。
+- `list(map(...))` 是先计算 `map(...)`，再转成列表。
+- `list` 是 Python 内置函数；`List[str]` 是类型标注，两者不是一回事。
+
+## 57. map、lambda、for 循环的对应关系
+
+`map(func, items)` 的意思是：对 `items` 里的每一项都执行 `func`。
+
+示例：
+
+| 代码 | 结果 |
+| --- | --- |
+| `list(map(lambda x: x * 2, [1, 2, 3]))` | `[2, 4, 6]` |
+
+等价循环：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `result = []` |
+| 2 | `for x in [1, 2, 3]:` |
+| 3 | `····result.append(x * 2)` |
+
+`lambda x: x * 2` 是匿名函数，等价于：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def double(x):` |
+| 2 | `····return x * 2` |
+
+所以：
+
+| 代码 | 含义 |
+| --- | --- |
+| `map(lambda x: x * 2, items)` | 遍历 `items`，每个 `x` 返回 `x * 2`。 |
+| `map(lambda p: exist(..., p, ...), permission)` | 遍历 `permission`，每个 `p` 调用一次 `exist(...)`。 |
+
+学习阶段建议：
+
+- 看到 `map(lambda...)`，先改写成 `for` 循环理解。
+- 如果 `lambda` 里逻辑很长，用普通 `def` 更清楚。
+- 项目代码里为了简洁会用 `map(lambda...)`，但新代码不一定要模仿。
+
+## 58. exist 不是 Python 语法
+
+`exist` 不是 Python 关键字，也不是内置函数。
+
+它只是这个项目自己定义的普通函数名：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def exist(user_role, user_permission, permission, request, **kwargs):` |
+
+所以这句：
+
+| 代码 | 含义 |
+| --- | --- |
+| `exist(request.auth.role_list, request.auth.permission_list, p, request, **kwargs)` | 调用项目里的 `exist` 函数，判断当前用户是否拥有某个权限或角色。 |
+
+参数拆开看：
+
+| 参数 | 含义 |
+| --- | --- |
+| `request.auth.role_list` | 当前用户拥有的角色列表。 |
+| `request.auth.permission_list` | 当前用户拥有的权限列表。 |
+| `p` | 当前正在检查的某一个权限条件。 |
+| `request` | 当前 HTTP 请求对象。 |
+| `**kwargs` | 额外上下文，比如 `workspace_id`、`knowledge_id`。 |
+
+源码阅读时判断一个名字是不是语法：
+
+| 情况 | 怎么判断 |
+| --- | --- |
+| `def exist(...)` | 说明 `exist` 是当前文件定义的函数。 |
+| `from xxx import exist` | 说明 `exist` 是从其他文件导入的函数。 |
+| `exist(...)` | 说明正在调用这个函数。 |
+
+所以不要把所有陌生名字都当成 Python 语法。很多名字只是项目作者起的函数名、类名、变量名。
+
+## 59. *permission 和 **kwargs 在这段代码里的意思
+
+这段函数：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def is_permissions(*permission, compare=CompareConstants.OR):` |
+
+`*permission` 表示接收任意多个位置参数。
+
+调用：
+
+| 代码 | 函数内部的值 |
+| --- | --- |
+| `is_permissions(A)` | `permission == (A,)` |
+| `is_permissions(A, B, C)` | `permission == (A, B, C)` |
+
+注意：
+
+- `permission` 虽然名字是单数，但因为前面有 `*`，所以它在函数内部是一个元组。
+- `for p in permission` 就是在遍历这个元组。
+
+这段函数：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `def get_is_permissions(request, **kwargs):` |
+
+`**kwargs` 表示接收任意多个关键字参数。
+
+调用：
+
+| 代码 | 函数内部的值 |
+| --- | --- |
+| `get_is_permissions(request, workspace_id="w1")` | `kwargs == {"workspace_id": "w1"}` |
+| `get_is_permissions(request, workspace_id="w1", knowledge_id="k1")` | `kwargs == {"workspace_id": "w1", "knowledge_id": "k1"}` |
+
+再传给别的函数时：
+
+| 代码 | 等价理解 |
+| --- | --- |
+| `exist(..., **kwargs)` | 把 `kwargs` 展开成 `workspace_id="w1"` 这类参数。 |
+
+## 60. 返回函数本身：return is_permissions
+
+这里最后一行是：
+
+| 代码 | 含义 |
+| --- | --- |
+| `return is_permissions` | 返回 `is_permissions` 这个函数本身。 |
+
+注意不是：
+
+| 代码 | 含义 |
+| --- | --- |
+| `return is_permissions()` | 立刻执行 `is_permissions`，返回执行结果。 |
+
+所以这段：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `checker = get_is_permissions(request, workspace_id=workspace_id)` |
+| 2 | `is_import_tool = checker(A, B, C)` |
+
+等价于项目里的连写：
+
+| 代码 |
+| --- |
+| `is_import_tool = get_is_permissions(request, workspace_id=workspace_id)(A, B, C)` |
+
+理解成两步：
+
+1. `get_is_permissions(...)` 先绑定 `request` 和 `workspace_id`。
+2. 返回的 `checker` 再检查 `A/B/C` 这些权限。
+
+## 61. any、all 和三元表达式
+
+这句：
+
+| 代码 |
+| --- |
+| `return any(exit_list) if compare == CompareConstants.OR else all(exit_list)` |
+
+是 Python 三元表达式。
+
+等价于：
+
+| 行号 | 代码 |
+| --- | --- |
+| 1 | `if compare == CompareConstants.OR:` |
+| 2 | `····return any(exit_list)` |
+| 3 | `else:` |
+| 4 | `····return all(exit_list)` |
+
+`any` 和 `all`：
+
+| 代码 | 结果 | 含义 |
+| --- | --- | --- |
+| `any([False, True, False])` | `True` | 只要有一个满足即可。 |
+| `all([False, True, False])` | `False` | 必须全部满足。 |
+| `all([True, True])` | `True` | 全部满足。 |
+
+在权限场景里：
+
+| compare | 含义 |
+| --- | --- |
+| `CompareConstants.OR` | 任意一个权限满足即可放行。 |
+| 非 `OR`，通常是 `AND` | 所有权限都满足才放行。 |
+
+## 62. 类、类对象和列表中放类
+
+这句：
+
+| 代码 |
+| --- |
+| `authentication_classes = [TokenAuth]` |
+
+里面的 `TokenAuth` 是类对象，不是字符串，也不是函数调用。
+
+对比：
+
+| 写法 | 含义 |
+| --- | --- |
+| `TokenAuth` | 类对象本身。 |
+| `TokenAuth()` | 创建一个 `TokenAuth` 实例。 |
+| `[TokenAuth]` | 创建列表，列表里放这个类对象。 |
+
+DRF 会读取这个列表，然后自己实例化：
+
+| 行号 | 伪代码 |
+| --- | --- |
+| 1 | `for auth_class in authentication_classes:` |
+| 2 | `····authenticator = auth_class()` |
+| 3 | `····authenticator.authenticate(request)` |
+
+所以源码里看起来没有直接调用 `TokenAuth()`，但框架会按约定读取 `authentication_classes`。
+
+同类写法：
+
+| 代码 | 含义 |
+| --- | --- |
+| `parser_classes = [MultiPartParser]` | 告诉 DRF 用 `MultiPartParser` 解析上传文件。 |
+| `authentication_classes = [TokenAuth]` | 告诉 DRF 用 `TokenAuth` 做身份认证。 |
+
+## 63. 装饰器和 raise 也是这次源码阅读的重点
+
+装饰器：
+
+| 代码 | 含义 |
+| --- | --- |
+| `@has_permissions(...)` | 给下面的接口方法加权限检查。 |
+| `@log(...)` | 给下面的接口方法加操作日志。 |
+| `@transaction.atomic` | 给下面的方法加数据库事务。 |
+
+装饰器等价理解：
+
+| 写法 | 等价理解 |
+| --- | --- |
+| `@has_permissions(A)` + `def post(...): ...` | `post = has_permissions(A)(post)` |
+
+`raise`：
+
+| 代码 | 含义 |
+| --- | --- |
+| `raise AppAuthenticationFailed(1003, "Not logged in")` | 抛出异常，中断当前流程。 |
+
+`return` 和 `raise` 的区别：
+
+| 写法 | 含义 |
+| --- | --- |
+| `return value` | 正常结束函数，返回一个值。 |
+| `raise error` | 异常结束函数，把错误交给上层处理。 |
+
+在接口源码里：
+
+- `return result.success(...)` 表示正常返回。
+- `raise AppAuthenticationFailed(...)` 表示认证失败，后续业务不执行。
+- `raise AppUnauthorizedFailed(...)` 表示权限失败，后续业务不执行。
+
+## 64. 当前文档新增语法的学习顺序
+
+建议按这个顺序继续学：
+
+1. `and` / `or` / `not`，先理解多个条件怎么组合。
+2. `==` / `!=` / `is None`，先理解判断语义。
+3. `try` / `except`，读懂工具调用和 JSON 解析失败时怎么兜底。
+4. `Path`、`with`、文件读写，读懂为什么写文件前要做安全检查。
+5. `json.dumps()` / `json.loads()`，读懂工具返回结构化数据的方式。
+6. `os.getenv()`，读懂为什么没有 Key 时不调用模型。
+7. `class` / `self` / `__init__`，再回头理解 `@dataclass` 为什么省事。
+8. `range()` / `enumerate()` / `zip()`，补齐循环能力。
+9. 切片、元组、解包，提升阅读 Python 代码的熟练度。
+10. `assert`，配合 `pytest` 阅读测试文件。
+11. `list(map(lambda...))`，读懂真实项目里把循环写短的方式。
+12. `*args` / `**kwargs`，读懂权限、装饰器、框架回调里的参数传递。
+13. 函数作为返回值，读懂 `get_is_permissions(...)(...)` 这种连写。
+14. 类对象放进列表，读懂 `authentication_classes = [TokenAuth]` 这类框架配置。
+15. `raise`，读懂认证失败、权限失败为什么会中断业务流程。
