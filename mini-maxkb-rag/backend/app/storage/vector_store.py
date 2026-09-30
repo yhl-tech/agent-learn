@@ -1,45 +1,34 @@
 """
-向量库封装。
+Chroma 向量仓库实现。
 
-Chroma 是第一版的向量存储。
-这个文件把 Chroma 的 API 包起来，避免业务服务里直接散落 Chroma 调用。
-
-后续如果切换到 PostgreSQL + pgvector，优先替换这个文件，而不是全项目搜索修改。
+Chroma 保存真实向量，SQLAlchemy Session 保存 EmbeddingRef。仓库统一维护两边
+的引用关系，业务服务不再直接感知具体向量后端。
 """
-
-from dataclasses import dataclass
 
 import chromadb
 from chromadb.config import Settings
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session
 
 from app.config import CHROMA_DIR
+from app.models import EmbeddingRefModel
+from app.repositories.embedding_repository import (
+    VectorSearchResult,
+    build_embedding_ref,
+)
 
 
 COLLECTION_NAME = "mini_maxkb_paragraphs"
 
 
-@dataclass
-class VectorSearchResult:
-    """
-    向量检索结果。
-
-    vector_id 是 Chroma 中的向量 ID。
-    score 是相似度分数，越大表示越相关。
-    metadata 用来带回 knowledge_id、document_id、paragraph_id 等业务信息。
-    """
-
-    vector_id: str
-    score: float
-    metadata: dict
-    document: str
-
-
-class ChromaVectorStore:
+class ChromaEmbeddingRepository:
     """
     Chroma 向量库客户端。
 
     这个类只处理向量库读写，不负责数据库表，也不负责生成 embedding。
     """
+
+    transactional = False
 
     def __init__(self) -> None:
         # 关闭匿名 telemetry。
@@ -52,6 +41,7 @@ class ChromaVectorStore:
 
     def add_paragraphs(
         self,
+        db: Session,
         ids: list[str],
         embeddings: list[list[float]],
         documents: list[str],
@@ -73,8 +63,59 @@ class ChromaVectorStore:
             documents=documents,
             metadatas=metadatas,
         )
+        db.add_all(
+            [
+                build_embedding_ref(vector_id, None, metadata)
+                for vector_id, metadata in zip(ids, metadatas)
+            ]
+        )
 
-    def search(self, knowledge_id: str, query_embedding: list[float], top_k: int) -> list[VectorSearchResult]:
+    def upsert_paragraphs(
+        self,
+        db: Session,
+        ids: list[str],
+        embeddings: list[list[float]],
+        documents: list[str],
+        metadatas: list[dict],
+    ) -> None:
+        """
+        新增或覆盖指定 ID 的段落向量。
+
+        正常入库使用 add，避免意外覆盖已有向量；删除或重新索引发生中途失败时，
+        补偿逻辑使用 upsert 恢复旧向量，即使部分旧向量仍存在也可以安全执行。
+        """
+
+        if not ids:
+            return
+
+        self.collection.upsert(
+            ids=ids,
+            embeddings=embeddings,
+            documents=documents,
+            metadatas=metadatas,
+        )
+        existing_ids = set(
+            db.scalars(
+                select(EmbeddingRefModel.vector_id).where(
+                    EmbeddingRefModel.vector_id.in_(ids)
+                )
+            ).all()
+        )
+        db.add_all(
+            [
+                build_embedding_ref(vector_id, None, metadata)
+                for vector_id, metadata in zip(ids, metadatas)
+                if vector_id not in existing_ids
+            ]
+        )
+
+    def search(
+        self,
+        db: Session,
+        knowledge_id: str,
+        query_embedding: list[float],
+        top_k: int,
+    ) -> list[VectorSearchResult]:
         """
         在某个知识库内检索最相关的段落。
 
@@ -109,7 +150,7 @@ class ChromaVectorStore:
 
         return search_results
 
-    def delete_by_document(self, document_id: str) -> None:
+    def delete_by_document(self, db: Session, document_id: str) -> None:
         """
         删除某个文档对应的全部向量。
 
@@ -118,3 +159,30 @@ class ChromaVectorStore:
         """
 
         self.collection.delete(where={"document_id": document_id})
+        db.execute(
+            delete(EmbeddingRefModel).where(
+                EmbeddingRefModel.document_id == document_id
+            )
+        )
+
+    def delete_by_ids(self, db: Session, vector_ids: list[str]) -> None:
+        """
+        精确删除一组向量。
+
+        重新索引时新旧向量会短暂共存，不能使用 document_id 整批删除，
+        否则会把刚写入的新向量一并移除。
+        """
+
+        if not vector_ids:
+            return
+
+        self.collection.delete(ids=vector_ids)
+        db.execute(
+            delete(EmbeddingRefModel).where(
+                EmbeddingRefModel.vector_id.in_(vector_ids)
+            )
+        )
+
+
+# 保留旧名称，避免外部学习代码在升级时立即失效。
+ChromaVectorStore = ChromaEmbeddingRepository

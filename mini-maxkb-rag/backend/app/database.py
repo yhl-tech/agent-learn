@@ -17,6 +17,7 @@ from app.config import DATABASE_URL
 engine = create_engine(
     DATABASE_URL,
     connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    pool_pre_ping=True,
 )
 
 # SessionLocal 是数据库会话工厂。
@@ -49,10 +50,21 @@ def get_db():
 
 def create_tables() -> None:
     """
-    创建数据库表。
+    初始化当前数据库表。
 
-    学习项目里先用 create_all，启动时自动建表。
-    生产项目通常会改成 Alembic 迁移，避免表结构变化不可控。
+    SQLite 为保持零配置体验继续自动建表并执行轻量迁移；PostgreSQL 的扩展、
+    生成列和 HNSW/GIN 索引必须通过 Alembic 明确管理。
     """
 
+    # 显式导入 models，确保即使测试或脚本只调用 create_tables()，
+    # SQLAlchemy 的 metadata 里也已经注册了所有业务表。
+    from app import models as _models  # noqa: F401
+    from app.migrations import run_lightweight_migrations
+
+    if engine.dialect.name != "sqlite":
+        return
+
     Base.metadata.create_all(bind=engine)
+    # create_all 不会修改已经存在的表，因此建表后还要执行兼容迁移。
+    # 新数据库已经包含完整字段，迁移函数会检查后直接跳过 ALTER TABLE。
+    run_lightweight_migrations(engine)

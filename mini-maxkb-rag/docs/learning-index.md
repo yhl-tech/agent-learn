@@ -17,22 +17,25 @@
 4. fastapi-dependency-learning.md
    理解 Depends(get_db) 如何给接口函数注入数据库会话。
 
-5. sqlalchemy-session-learning.md
+5. database-orm-basics-learning.md
+   理解表、行、字段如何映射为 ORM 模型类、属性和实例。
+
+6. sqlalchemy-session-learning.md
    理解 engine、SessionLocal、Session、Model、select、flush、commit。
 
-6. pydantic-schema-learning.md
+7. pydantic-schema-learning.md
    理解 API 入参和出参为什么用 Schema，以及 Field 校验怎么生效。
 
-7. text-chunking-learning.md
+8. text-chunking-learning.md
    理解为什么要把文档切成 chunk/paragraph，以及 chunk_size、overlap 的影响。
 
-8. embedding-learning.md
+9. embedding-learning.md
    理解文本向量是什么，以及本项目的 HashEmbeddingService。
 
-9. chromadb-learning.md
+10. chromadb-learning.md
    理解 ChromaDB、collection、metadata、where、distance 和 score。
 
-10. retrieval-flow-learning.md
+11. retrieval-flow-learning.md
     理解 retrieve_paragraphs 如何把向量检索结果转回业务段落。
 ```
 
@@ -50,6 +53,9 @@ HTTP 请求如何进入后端业务代码？
 
 fastapi-dependency-learning.md
 db、embedding_service、vector_store 这些参数是谁传进来的？
+
+database-orm-basics-learning.md
+数据库的表、行、字段，如何对应 ORM 模型类、实例和属性？
 
 sqlalchemy-session-learning.md
 业务代码如何通过 Session 读写 SQLite？
@@ -92,6 +98,7 @@ project-layering-learning.md
 text-chunking-learning.md
 embedding-learning.md
 chromadb-learning.md
+database-orm-basics-learning.md
 sqlalchemy-session-learning.md
 ```
 
@@ -135,6 +142,7 @@ retrieval-flow-learning.md
 project-layering-learning.md
 fastapi-api-learning.md
 fastapi-dependency-learning.md
+database-orm-basics-learning.md
 sqlalchemy-session-learning.md
 pydantic-schema-learning.md
 config-and-runtime-learning.md

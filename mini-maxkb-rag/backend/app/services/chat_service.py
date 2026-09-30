@@ -30,6 +30,8 @@ def build_references(retrieved: list[RetrievedParagraph]) -> list[ReferenceRead]
             paragraph_id=item.paragraph.id,
             content=item.paragraph.content,
             score=item.score,
+            match_type=item.match_type,
+            score_meta=item.score_meta,
         )
         for item in retrieved
     ]
