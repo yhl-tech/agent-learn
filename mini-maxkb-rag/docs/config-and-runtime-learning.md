@@ -10,6 +10,8 @@
 数据库文件放哪里
 上传文件放哪里
 Chroma 向量数据放哪里
+使用 Chroma 还是 pgvector
+任务在本地线程还是 Celery Worker 执行
 允许哪个前端域名访问
 是否配置了大模型 API Key
 默认召回多少段
@@ -45,6 +47,8 @@ config.py 负责把运行环境整理成代码可以直接使用的常量。
 
 ```python
 from app.config import DATABASE_URL
+from app.config import VECTOR_BACKEND
+from app.config import TASK_EXECUTOR
 from app.config import CHROMA_DIR
 from app.config import DEFAULT_TOP_K
 ```
@@ -166,10 +170,10 @@ sqlite:///backend/data/app.db
 如果设置环境变量：
 
 ```bash
-DATABASE_URL=postgresql://user:password@localhost:5432/dbname
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/dbname
 ```
 
-项目就可以切到其他数据库。
+项目就可以切到 PostgreSQL。PostgreSQL 模式应先执行 `alembic upgrade head`，不能只依赖 `create_all()`。
 
 学习版先用 SQLite 的原因：
 
@@ -221,9 +225,17 @@ backend/data/files/{knowledge_id}/{uuid}-{filename}
 避免同名上传文件互相覆盖
 ```
 
-## 8. Chroma 目录配置
+## 8. 向量后端和 Chroma 目录配置
 
-向量数据目录：
+向量后端由 `VECTOR_BACKEND` 控制：
+
+```text
+auto       PostgreSQL 自动选择 pgvector，其他数据库选择 Chroma
+chroma     显式使用 Chroma
+pgvector   显式使用 PostgreSQL pgvector
+```
+
+只有 Chroma 模式使用下面的向量数据目录：
 
 ```python
 CHROMA_DIR = DATA_DIR / "chroma"
@@ -255,7 +267,7 @@ SQLite 业务数据可能还在
 检索会查不到已上传文档对应的向量
 ```
 
-所以 `app.db` 和 `chroma/` 要保持一致。
+所以在 SQLite + Chroma 模式中，`app.db` 和 `chroma/` 要保持一致。pgvector 模式的向量位于 PostgreSQL `embedding_ref.embedding` 列，不使用 `CHROMA_DIR` 保存向量。
 
 ## 9. CORS 配置
 
@@ -361,13 +373,13 @@ HashEmbeddingService 默认生成 256 维向量。
 
 ```text
 embedding_service.py 生成向量的长度
-Chroma 中保存的向量维度
+Chroma collection 或 pgvector 列中的向量维度
 ```
 
 需要注意：
 
 ```text
-同一个 Chroma collection 里向量维度必须一致。
+同一个 Chroma collection 或 pgvector 列里向量维度必须一致。
 ```
 
 如果改了 `EMBEDDING_DIMENSION`：
@@ -391,26 +403,27 @@ DEFAULT_TOP_K = int(os.getenv("DEFAULT_TOP_K", "4"))
 问答时默认召回 4 个段落。
 ```
 
-在 `chat_api.py` 中：
+实际生效值由 `resolve_retrieval_config` 合并：
 
-```python
-top_k = payload.top_k or DEFAULT_TOP_K
+```text
+系统默认配置
+-> Knowledge.retrieval_config
+-> ChatRequest / RetrievalTestRequest 单次覆盖
 ```
 
-同时 `ChatRequest` 中也定义了默认值：
+`ChatRequest` 中字段为可选：
 
 ```python
-top_k: int = Field(default=4, ge=1, le=20)
+top_k: Optional[int] = Field(default=None, ge=1, le=20)
 ```
 
 这说明：
 
 ```text
-Schema 控制请求字段默认和范围
-config 提供项目级默认配置
+Schema 控制请求字段范围
+Knowledge.retrieval_config 保存知识库级配置
+config 提供系统级默认值
 ```
-
-当前两处默认值都是 4。
 
 ## 13. 启动时准备什么
 
@@ -491,12 +504,21 @@ Chroma 向量索引
 ```text
 MINI_MAXKB_DATA_DIR   运行时数据根目录
 DATABASE_URL          SQLAlchemy 数据库连接串
+VECTOR_BACKEND        auto / chroma / pgvector
 CORS_ORIGINS          允许跨域访问的前端地址
 OPENAI_API_KEY        大模型 API Key
 OPENAI_BASE_URL       OpenAI-compatible API 地址
 OPENAI_CHAT_MODEL     聊天模型名
 EMBEDDING_DIMENSION   本地哈希向量维度
 DEFAULT_TOP_K         默认检索条数
+TASK_EXECUTOR         background / celery
+CELERY_BROKER_URL     Celery 使用的 Redis 地址
+TASK_MAX_ATTEMPTS     单轮任务最大执行次数
+TASK_LEASE_SECONDS    Worker 执行权租约
+TASK_HEARTBEAT_INTERVAL_SECONDS  Worker 心跳间隔
+OUTBOX_BATCH_SIZE     Relay 每批领取事件数
+OUTBOX_LEASE_SECONDS  Outbox 发布租约
+OUTBOX_RELAY_IN_WEB   是否随 Web 启动 Relay
 ```
 
 配置优先级：
@@ -524,8 +546,9 @@ FILES_DIR 是否创建成功
 
 ```text
 CHROMA_DIR 是否存在
-上传文档后 Chroma 是否写入成功
-是否误删了 backend/data/chroma
+VECTOR_BACKEND 是否符合当前数据库
+Chroma 模式是否写入成功、目录是否被误删
+pgvector 模式是否执行 Alembic 且已安装 vector 扩展
 EMBEDDING_DIMENSION 是否改过
 ```
 
@@ -534,8 +557,18 @@ EMBEDDING_DIMENSION 是否改过
 检查：
 
 ```text
-main.py 是否执行 create_tables()
-DATABASE_URL 是否指向预期的 app.db
+SQLite：main.py 是否执行 create_tables()，DATABASE_URL 是否指向预期 app.db
+PostgreSQL：是否执行 alembic upgrade head，连接串和权限是否正确
+```
+
+问题：上传后任务一直是 `PENDING`。
+
+检查：
+
+```text
+background 模式：OUTBOX_RELAY_IN_WEB 是否开启
+celery 模式：Redis、Celery Worker 和独立 Outbox Relay 是否运行
+OutboxEvent 的 available_at、status 和 last_error
 ```
 
 问题：前端跨域。
@@ -560,26 +593,35 @@ OPENAI_CHAT_MODEL 是否可用
 
 ## 17. 学习项目和生产项目的区别
 
-学习项目：
+本地默认模式：
 
 ```text
 启动时自动 create_all
 本地 SQLite
 本地文件系统
 本地 Chroma 持久化目录
+Web 内嵌 Outbox Relay
 没有复杂配置中心
 ```
 
-生产项目通常会有：
+本项目已提供的生产演进模式：
 
 ```text
-数据库迁移工具
+PostgreSQL + Alembic
+pgvector + tsvector
+Celery + Redis
+独立 Outbox Relay
+任务重试、租约、心跳和取消
+```
+
+仍需继续补齐：
+
+```text
 对象存储
-独立向量数据库服务
 配置中心或密钥管理
 多环境配置
 日志和监控
-异步任务
+任务积压和死信治理
 ```
 
 但核心思想一样：
@@ -596,6 +638,8 @@ DATA_DIR = 运行时数据根目录
 FILES_DIR = 原始文件目录
 CHROMA_DIR = 向量索引目录
 DATABASE_URL = 数据库连接串
+VECTOR_BACKEND = 选择 Chroma 或 pgvector
+TASK_EXECUTOR = 选择本地 background 或 Celery
 CORS_ORIGINS = 前端跨域白名单
 ensure_runtime_dirs = 启动时创建必要目录
 ```

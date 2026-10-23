@@ -96,7 +96,7 @@ async def chat_api(
 ):
 ```
 
-这些接口都需要访问 SQLite。
+这些接口都需要访问当前配置的业务数据库，可以是 SQLite 或 PostgreSQL。
 
 所以它们都声明：
 
@@ -265,7 +265,7 @@ Web 服务同时会处理很多请求。
 
 ```python
 embedding_service: HashEmbeddingService = Depends(get_embedding_service)
-vector_store: ChromaVectorStore = Depends(get_vector_store)
+vector_store: EmbeddingRepository = Depends(get_embedding_repository)
 ```
 
 它们来自：
@@ -282,8 +282,10 @@ def get_embedding_service() -> HashEmbeddingService:
     return HashEmbeddingService()
 
 @lru_cache
-def get_vector_store() -> ChromaVectorStore:
-    return ChromaVectorStore()
+def get_embedding_repository() -> EmbeddingRepository:
+    if VECTOR_BACKEND == "pgvector":
+        return PostgresEmbeddingRepository()
+    return ChromaEmbeddingRepository()
 ```
 
 这说明 `Depends` 的本质是：
@@ -298,13 +300,13 @@ def get_vector_store() -> ChromaVectorStore:
 每个请求创建，用完关闭。
 ```
 
-embedding/vector_store 依赖：
+embedding/repository 依赖：
 
 ```text
 用 lru_cache 缓存，多个请求复用。
 ```
 
-## 10. `Depends(get_db)` 和 `Depends(get_vector_store)` 的区别
+## 10. `Depends(get_db)` 和 `Depends(get_embedding_repository)` 的区别
 
 `get_db`：
 
@@ -314,11 +316,11 @@ embedding/vector_store 依赖：
 请求结束后关闭
 ```
 
-`get_vector_store`：
+`get_embedding_repository`：
 
 ```text
 应用级依赖
-第一次调用创建 ChromaVectorStore
+第一次调用时按 VECTOR_BACKEND 创建仓库实现
 后续请求复用同一个实例
 ```
 
@@ -328,11 +330,11 @@ embedding/vector_store 依赖：
 
 它不应该被所有请求长期共享。
 
-为什么 vector_store 可以缓存？
+为什么 embedding repository 可以缓存？
 
-因为它更像一个客户端封装。
+因为它是无请求状态的仓库或客户端封装。
 
-重复初始化 Chroma 客户端没有必要。
+重复初始化 Chroma 客户端没有必要，pgvector 实现也只使用调用方传入的请求级 Session。
 
 ## 11. Depends 的执行顺序
 
@@ -344,7 +346,7 @@ async def chat_api(
     payload: ChatRequest,
     db: Session = Depends(get_db),
     embedding_service: HashEmbeddingService = Depends(get_embedding_service),
-    vector_store: ChromaVectorStore = Depends(get_vector_store),
+    vector_store: EmbeddingRepository = Depends(get_embedding_repository),
 ):
 ```
 
@@ -355,7 +357,7 @@ FastAPI 大致会做：
 解析 JSON，得到 payload
 调用 get_db，得到 db
 调用 get_embedding_service，得到 embedding_service
-调用 get_vector_store，得到 vector_store
+调用 get_embedding_repository，得到 vector_store
 执行 chat_api(...)
 请求结束后清理 get_db 的 yield 资源
 ```
@@ -435,7 +437,7 @@ db 是后端依赖注入生成的。
 误区四：把所有对象都做成全局变量。
 
 ```text
-有些资源可以复用，例如 vector_store。
+有些无请求状态的对象可以复用，例如 embedding repository。
 有些资源应该请求隔离，例如 db Session。
 ```
 

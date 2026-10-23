@@ -44,7 +44,7 @@ ParagraphModel
 -> 切成 chunks
 -> 每个 chunk 创建一个 ParagraphModel
 -> 每个 ParagraphModel 生成 embedding
--> 写入 Chroma
+-> 通过 EmbeddingRepository 写入 Chroma 或 pgvector
 ```
 
 问答阶段：
@@ -330,7 +330,7 @@ return [TextChunk(position=index, content=chunk.content) for index, chunk in enu
 
 ```text
 ParagraphModel.position
-Chroma metadata.position
+向量索引 metadata.position
 ```
 
 作用：

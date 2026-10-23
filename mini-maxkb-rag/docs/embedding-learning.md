@@ -125,10 +125,11 @@ embeddings = embedding_service.embed_texts(
 但以后换成真实 embedding API 时，批量请求通常更高效
 ```
 
-随后这些向量会写入 Chroma：
+随后这些向量会通过统一仓库写入当前向量后端：
 
 ```python
-vector_store.add_paragraphs(
+vector_store.upsert_paragraphs(
+    db=db,
     ids=vector_ids,
     embeddings=embeddings,
     documents=[paragraph.content for paragraph in paragraphs],
@@ -136,12 +137,22 @@ vector_store.add_paragraphs(
 )
 ```
 
-也就是说：
+本地默认模式：
 
 ```text
 SQLite 保存 paragraph 业务数据
 Chroma 保存 paragraph 对应的 embedding
 ```
+
+PostgreSQL 模式：
+
+```text
+ParagraphModel 保存段落
+EmbeddingRefModel.embedding 保存 pgvector 向量
+两者共享同一个数据库事务
+```
+
+业务代码只依赖 `EmbeddingRepository`，不直接决定使用哪一种后端。
 
 ## 5. 问答时怎么用 Embedding
 
@@ -161,6 +172,7 @@ query_embedding = embedding_service.embed_text(question)
 
 ```python
 vector_results = vector_store.search(
+    db=db,
     knowledge_id=knowledge_id,
     query_embedding=query_embedding,
     top_k=top_k,
@@ -171,7 +183,7 @@ vector_results = vector_store.search(
 
 ```text
 用问题向量 query_embedding
-去 Chroma 中查最相似的段落向量
+去当前向量后端查最相似的段落或问题向量
 只查当前 knowledge_id 下的数据
 最多返回 top_k 条
 ```
@@ -349,7 +361,7 @@ HashEmbeddingService 更像一个工程演示版。
 ```text
 相同词出现时，向量更可能相似
 文本可被转换成固定维度向量
-可以接入 Chroma 完成检索链路
+可以接入 Chroma 或 pgvector 完成检索链路
 ```
 
 它做不到：
@@ -387,7 +399,7 @@ embed_texts(texts: list[str]) -> list[list[float]]
 需要注意：
 
 ```text
-向量维度必须和 Chroma 中已有 collection 的维度一致
+向量维度必须和当前向量后端的既有索引或列定义一致
 旧向量通常需要重建
 批量接口要处理限流和失败重试
 模型变更会影响检索效果
@@ -402,10 +414,10 @@ embed_texts(texts: list[str]) -> list[list[float]]
 清空旧向量
 重新读取 paragraph
 重新生成 embedding
-重新写入 Chroma
+重新写入当前向量后端
 ```
 
-## 11. 和 ChromaDB 的关系
+## 11. 和向量仓库的关系
 
 Embedding 服务只负责：
 
@@ -413,12 +425,12 @@ Embedding 服务只负责：
 文本 -> 向量
 ```
 
-ChromaDB 负责：
+`EmbeddingRepository` 负责：
 
 ```text
 保存向量
 根据查询向量查相似向量
-返回 id、document、metadata、distance
+返回统一的 vector_id、score、metadata、document
 ```
 
 职责边界：
@@ -434,8 +446,15 @@ retrieval_service 负责把两者串起来
 ```text
 HashEmbeddingService.embed_text     生成问题向量
 HashEmbeddingService.embed_texts    生成段落向量
-ChromaVectorStore.add_paragraphs    保存段落向量
-ChromaVectorStore.search            查询相似段落
+EmbeddingRepository.upsert_paragraphs 保存段落或问题向量
+EmbeddingRepository.search            查询相似向量
+```
+
+具体实现：
+
+```text
+ChromaEmbeddingRepository     本地 SQLite 模式
+PostgresEmbeddingRepository   PostgreSQL + pgvector 模式
 ```
 
 ## 12. 读代码时的重点问题
@@ -457,9 +476,10 @@ ChromaVectorStore.search            查询相似段落
 文档上传时，paragraph.content 被批量转成向量
 用户提问时，question 被转成查询向量
 向量默认 256 维
-向量写入 Chroma
+向量写入 Chroma 或 embedding_ref.embedding
 查询时用 question 的向量
-检索结果通过 metadata.paragraph_id 回 SQLite 查 paragraph
+段落向量通过 paragraph_id 回源
+问题向量通过 problem_id -> mapping -> paragraph_id 回源
 ```
 
 ## 13. 最小记忆模型

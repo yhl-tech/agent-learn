@@ -7,7 +7,7 @@
 例如你上传了一份项目说明：
 
 ```text
-Mini MaxKB RAG 的向量库使用 ChromaDB。
+Mini MaxKB RAG 本地使用 Chroma，PostgreSQL 模式使用 pgvector。
 ```
 
 用户随后提问：
@@ -75,15 +75,17 @@ Generation   生成
 创建知识库
 -> 上传文档
 -> 保存原始文件
+-> 创建 Task 和 OutboxEvent
+-> 后台 Worker 认领任务
 -> 读取文本
 -> 文本切分
 -> 段落入库
 -> 生成段落向量
--> 向量写入 Chroma
+-> 通过 EmbeddingRepository 写入向量
 -> 用户提问
--> 问题向量化
--> Chroma 检索相似段落
--> 回 SQLite 查段落和文档
+-> 按配置执行向量、关键词或混合检索
+-> 问题向量命中时经 Mapping 回到段落
+-> 从业务数据库读取段落和文档
 -> 组装 prompt
 -> 调用模型生成回答
 -> 返回 answer + references
@@ -121,19 +123,23 @@ backend/app/services/chunk_service.py        文本切分
 backend/app/services/embedding_service.py    文本转向量
 backend/app/services/retrieval_service.py    检索段落
 backend/app/services/chat_service.py         生成回答
+backend/app/services/task_service.py         任务认领、重试、取消和执行
+backend/app/services/outbox_service.py       可靠投递任务事件
 ```
 
-存储封装：
+仓库和存储封装：
 
 ```text
 backend/app/storage/file_storage.py    原始文件保存和读取
-backend/app/storage/vector_store.py    ChromaDB 向量读写
+backend/app/repositories/embedding_repository.py  统一向量仓库协议和 pgvector 实现
+backend/app/storage/vector_store.py             Chroma 向量仓库实现
+backend/app/repositories/paragraph_repository.py 关键词检索
 ```
 
 数据结构：
 
 ```text
-backend/app/models.py     SQLite 表结构
+backend/app/models.py     SQLAlchemy 表结构
 backend/app/schemas.py    API 入参和出参
 ```
 
@@ -195,29 +201,30 @@ backend/app/api/document_api.py
 backend/app/services/document_service.py
 ```
 
-核心流程在 `upload_document`：
+上传接口的受理流程在 `create_document_task`：
 
 ```text
 检查知识库是否存在
 -> 保存上传文件
--> 读取文本
--> 切分文本
+-> 创建 FileModel
 -> 创建 DocumentModel
--> 创建 ParagraphModel
--> 生成 embedding
--> 写入 Chroma
--> 创建 EmbeddingRefModel
--> commit
+-> 创建 TaskModel
+-> 创建 OutboxEventModel
+-> 同一事务 commit
+-> 快速返回 task_id
 ```
 
-关键点：
+后台 Worker 再执行：
 
 ```text
-DocumentModel      记录文档本身
-ParagraphModel     记录切分后的段落
-EmbeddingRefModel  记录 paragraph_id 和 vector_id 的对应关系
-Chroma             保存真正的向量
+读取文件
+-> 切分 Paragraph
+-> 生成 embedding
+-> EmbeddingRepository.upsert_paragraphs
+-> 更新 Document、Task、TaskAttempt
 ```
+
+上传受理和耗时索引拆开后，HTTP 请求不需要等待大文件处理完成。可靠任务链路见 `async-task-outbox-learning.md`。
 
 ## 7. 为什么不直接检索整篇文档
 
@@ -274,9 +281,9 @@ question -> query embedding
 query embedding 和哪些 paragraph embedding 最相似
 ```
 
-## 9. SQLite 和 Chroma 的分工
+## 9. 业务数据与向量索引的分工
 
-这个项目用了两个存储。
+本地默认模式使用两个存储。
 
 SQLite 保存业务数据：
 
@@ -296,22 +303,23 @@ document text
 metadata
 ```
 
-为什么要分开？
+它们通过稳定 `vector_id` 和 metadata 关联。
+
+PostgreSQL 模式则使用一个数据库：
 
 ```text
-SQLite 适合查业务关系
-Chroma 适合查向量相似度
+PostgreSQL 普通列     保存业务关系
+pgvector 向量列       保存并检索 embedding
+PostgreSQL tsvector   执行关键词检索
 ```
 
-例如问答时，Chroma 先返回：
+业务 service 不直接选择后端，而是依赖：
 
 ```text
-vector_id
-metadata.paragraph_id
-distance
+EmbeddingRepository
 ```
 
-然后项目再用 `paragraph_id` 回 SQLite 查询：
+检索结果最终都要用 `paragraph_id` 回业务表查询：
 
 ```text
 ParagraphModel.content
@@ -369,33 +377,31 @@ return await answer_question(payload.question, retrieved)
 backend/app/services/retrieval_service.py
 ```
 
-核心逻辑：
-
-```python
-query_embedding = embedding_service.embed_text(question)
-vector_results = vector_store.search(
-    knowledge_id=knowledge_id,
-    query_embedding=query_embedding,
-    top_k=top_k,
-)
-```
-
-可以理解为：
+检索服务先根据知识库配置和单次请求覆盖值确定：
 
 ```text
-把问题变成向量
--> 拿问题向量查 Chroma
--> 得到相似段落的 metadata
--> 根据 paragraph_id 回 SQLite 查真实段落
+search_mode
+top_k
+score_threshold
+blend_weight
 ```
 
-这里最关键的过滤条件是：
+然后按模式执行：
 
-```python
-where={"knowledge_id": knowledge_id}
+```text
+embedding  问题向量 -> EmbeddingRepository
+keywords   原始问题 -> FTS5 或 tsvector
+blend      两路候选 -> weighted RRF
 ```
 
-没有它，不同知识库的数据会互相串。
+向量候选可能直接指向段落，也可能命中增强问题：
+
+```text
+paragraph vector -> paragraph_id
+problem vector   -> problem_id -> ProblemParagraphMapping -> paragraph_id
+```
+
+最后批量读取 `ParagraphModel` 和 `DocumentModel`，并再次校验 `knowledge_id`。详细说明见 `retrieval-flow-learning.md`。
 
 ## 12. 回答服务做了什么
 
@@ -523,7 +529,7 @@ overlap 不合理，关键句被切断
 中文语义理解弱
 ```
 
-第三类：向量库过滤不严。
+第三类：检索边界过滤不严。
 
 ```text
 没有按 knowledge_id 过滤
@@ -537,11 +543,11 @@ overlap 不合理，关键句被切断
 模型可能补充未被检索到的信息
 ```
 
-第五类：索引和业务库不一致。
+第五类：索引和业务表不一致。
 
 ```text
-SQLite 里有 paragraph，但 Chroma 没有向量
-Chroma 有向量，但 SQLite 查不到 paragraph
+业务表里有 paragraph，但向量后端没有向量
+向量后端有结果，但业务表查不到 paragraph
 ```
 
 ## 16. 读代码时的顺序
@@ -553,18 +559,21 @@ Chroma 有向量，但 SQLite 查不到 paragraph
    看应用如何启动、router 如何注册。
 
 2. backend/app/api/document_api.py
-   看上传文档接口怎么进入入库流程。
+   看上传文档接口怎么创建待处理任务。
 
 3. backend/app/services/document_service.py
-   看保存文件、切分、向量化、写入数据库和 Chroma。
+   看上传事务和文档索引正文。
 
-4. backend/app/api/chat_api.py
+4. backend/app/services/outbox_service.py 和 task_service.py
+   看任务如何可靠投递、认领和执行。
+
+5. backend/app/api/chat_api.py
    看提问接口怎么进入问答流程。
 
-5. backend/app/services/retrieval_service.py
-   看问题向量如何检索段落。
+6. backend/app/services/retrieval_service.py
+   看向量、关键词、问题增强和混合排序如何得到段落。
 
-6. backend/app/services/chat_service.py
+7. backend/app/services/chat_service.py
    看引用如何组成 prompt 和回答。
 ```
 
@@ -592,8 +601,8 @@ Knowledge      KnowledgeModel
 Document       DocumentModel
 Chunk          TextChunk / ParagraphModel
 Embedding      HashEmbeddingService 输出的 list[float]
-Vector Store   ChromaVectorStore
-Metadata       knowledge_id / document_id / paragraph_id / position
+Vector Store   EmbeddingRepository
+Metadata       knowledge_id / document_id / paragraph_id / source_type
 Reference      ReferenceRead
 ```
 
@@ -602,8 +611,8 @@ Reference      ReferenceRead
 ```text
 RAG = 先检索，再生成
 入库 = 把文档变成段落索引
-问答 = 把问题变成向量去查段落
-SQLite = 存业务数据
-Chroma = 存向量数据
+问答 = 用向量、关键词或混合模式召回段落
+EmbeddingRepository = 隔离 Chroma 与 pgvector
+Problem Mapping = 把问题命中回到原始段落
 references = 告诉用户答案依据
 ```

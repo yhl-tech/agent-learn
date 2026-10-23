@@ -2,7 +2,14 @@
 
 ## 1. ChromaDB 是什么
 
-ChromaDB 是向量数据库。
+ChromaDB 是向量数据库，也是本项目在 SQLite 本地模式下使用的向量后端。
+
+当前业务代码不直接依赖 Chroma，而是依赖统一的 `EmbeddingRepository`：
+
+```text
+SQLite + Chroma 模式       ChromaEmbeddingRepository
+PostgreSQL + pgvector 模式 PostgresEmbeddingRepository
+```
 
 普通数据库擅长查：
 
@@ -52,6 +59,13 @@ Chroma 保存“用于相似度检索的数据”
 SQLite 保存“业务对象和业务关系”
 ```
 
+问题增强向量还会在 metadata 中保存：
+
+```text
+source_type = problem
+problem_id
+```
+
 ## 3. 本项目中的封装
 
 入口：
@@ -63,16 +77,15 @@ backend/app/storage/vector_store.py
 核心类：
 
 ```python
-class ChromaVectorStore:
+class ChromaEmbeddingRepository:
 ```
 
-这个类只负责向量库。
+它实现 `EmbeddingRepository` 协议，是 Chroma 的具体适配器。
 
 它不负责：
 
 ```text
 生成 embedding
-保存 SQLAlchemy Model
 处理 HTTP 请求
 组装 prompt
 ```
@@ -85,7 +98,10 @@ class ChromaVectorStore:
 写入段落向量
 查询相似段落
 按 document_id 删除向量
+同步维护 SQLAlchemy Session 中的 EmbeddingRefModel
 ```
+
+业务 service 只看到统一仓库接口，因此切换 pgvector 时不需要改检索流程。
 
 ## 4. Client 是什么
 
@@ -181,13 +197,14 @@ collection 管理简单
 
 这是数据隔离的关键。
 
-## 7. 写入向量：`collection.add`
+## 7. 写入向量：`collection.add` 与 `collection.upsert`
 
 封装方法：
 
 ```python
 def add_paragraphs(
     self,
+    db: Session,
     ids: list[str],
     embeddings: list[list[float]],
     documents: list[str],
@@ -205,6 +222,8 @@ self.collection.add(
     metadatas=metadatas,
 )
 ```
+
+当前异步索引主链路使用 `upsert_paragraphs`。因为 Celery 和 Outbox 是至少一次投递，同一任务可能再次执行；稳定 `vector_id` 配合 `upsert` 可以覆盖同一条向量，而不是生成重复数据。
 
 四组数据必须一一对应：
 
@@ -247,6 +266,7 @@ metadatas = [
         "document_id": document.id,
         "paragraph_id": paragraph.id,
         "position": paragraph.position,
+        "source_type": "paragraph",
     }
     for paragraph in paragraphs
 ]
@@ -284,7 +304,13 @@ paragraph = db.get(ParagraphModel, paragraph_id)
 封装方法：
 
 ```python
-def search(self, knowledge_id: str, query_embedding: list[float], top_k: int) -> list[VectorSearchResult]:
+def search(
+    self,
+    db: Session,
+    knowledge_id: str,
+    query_embedding: list[float],
+    top_k: int,
+) -> list[VectorSearchResult]:
 ```
 
 内部调用：
@@ -461,6 +487,8 @@ EmbeddingRefModel
 knowledge_id
 document_id
 paragraph_id
+problem_id
+source_type
 vector_id
 ```
 
@@ -479,14 +507,21 @@ vector_id
 删除 SQLite 业务数据
 ```
 
-学习版里这个表先保持简单。
+在 Chroma 模式中，`embedding_ref.embedding` 为空，它主要承担业务引用作用。
+
+在 pgvector 模式中，同一张表的 `embedding` 列保存真实向量：
+
+```text
+Chroma 模式      EmbeddingRef 是外部向量引用
+pgvector 模式    EmbeddingRef 同时保存引用和真实向量
+```
 
 ## 14. `delete_by_document`
 
 代码：
 
 ```python
-def delete_by_document(self, document_id: str) -> None:
+def delete_by_document(self, db: Session, document_id: str) -> None:
     self.collection.delete(where={"document_id": document_id})
 ```
 
@@ -496,9 +531,7 @@ def delete_by_document(self, document_id: str) -> None:
 删除某个文档对应的全部向量。
 ```
 
-当前 v0.1 暂时没有暴露删除文档接口。
-
-但底层能力先准备好，后续做删除文档时会用。
+当前删除和重新索引链路已经使用该能力，同时删除 Chroma 向量和当前 Session 中的 `EmbeddingRefModel`。
 
 关键点：
 
@@ -508,7 +541,7 @@ def delete_by_document(self, document_id: str) -> None:
 
 ## 15. 向量维度要一致
 
-写入 Chroma 的 embedding 维度必须一致。
+写入同一 Chroma collection 的 embedding 维度必须一致。
 
 本项目默认：
 
@@ -522,11 +555,11 @@ EMBEDDING_DIMENSION = 256
 
 ```text
 旧 collection 里的 256 维向量不能和 1536 维向量混用
-通常要清空或重建 Chroma 数据
-SQLite 里的 embedding_ref 也要同步处理
+通常要重建对应向量索引
+业务数据库里的 embedding_ref 也要同步处理
 ```
 
-这是向量库常见问题。
+pgvector 模式也要求 ORM `Vector(EMBEDDING_DIMENSION)`、数据库列和生成模型的维度一致。
 
 ## 16. 常见知识点
 
@@ -569,7 +602,8 @@ Top K         ChatRequest.top_k
 5. 查询时 where 是否带 knowledge_id
 6. top_k 是否太小
 7. embedding 模型是否能表达语义相似
-8. SQLite 是否能根据 paragraph_id 查回段落
+8. 业务数据库是否能根据 paragraph_id 查回段落
+9. source_type=problem 时是否存在有效 problem_id 和 mapping
 ```
 
 不要一开始就怀疑大模型。
@@ -587,6 +621,7 @@ metadata 对齐
 
 ```text
 ChromaDB = 保存向量并做相似度查询
+ChromaEmbeddingRepository = EmbeddingRepository 的本地实现
 collection = 一组向量数据
 embedding = 用来比较相似度的数字列表
 metadata = 让向量能回到业务对象
@@ -594,3 +629,5 @@ where = 数据隔离过滤条件
 distance 小 = 更相似
 score 大 = 更相似
 ```
+
+Chroma 不是业务层的固定依赖。业务层依赖 `EmbeddingRepository`，生产 PostgreSQL 模式可以替换为 pgvector。

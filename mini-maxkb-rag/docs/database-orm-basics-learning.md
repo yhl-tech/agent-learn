@@ -2,15 +2,27 @@
 
 ## 1. 数据库里的基本结构
 
-本项目使用 SQLite 保存业务数据。可以先把数据库理解成一个保存多张表的文件：
+本项目支持两套数据库运行方式：
 
-```C
-app.db
-├── knowledge_folder
-├── knowledge
-├── document
-├── paragraph
-└── embedding_ref
+```text
+本地默认：SQLite 保存业务数据，Chroma 保存向量
+生产模式：PostgreSQL 同时保存业务数据和 pgvector 向量
+```
+
+数据库中共有 11 张 ORM 表：
+
+```text
+knowledge_folder
+knowledge
+file
+document
+paragraph
+problem
+problem_paragraph_mapping
+embedding_ref
+task
+task_attempt
+outbox_event
 ```
 
 以 `document` 表为例：
@@ -132,17 +144,17 @@ SQLAlchemy 是 Python 的数据库工具箱。
 需要先区分：
 
 ```text
-SQLite       是数据库，真正保存数据
+SQLite / PostgreSQL   是数据库，真正保存数据
 SQLAlchemy   是 Python 与数据库之间的操作层
 ```
 
-可以把 SQLite 想成“仓库”，把 SQL 想成“仓库操作指令”，SQLAlchemy 则像一个 Python 操作员：
+可以把数据库想成“仓库”，把 SQL 想成“仓库操作指令”，SQLAlchemy 则像一个 Python 操作员：
 
 ```text
 Python 业务代码
 -> SQLAlchemy 理解操作
 -> 生成并执行 SQL
--> SQLite 读取或保存数据
+-> SQLite 或 PostgreSQL 读取、保存数据
 ```
 
 ### 3.1 它解决什么问题
@@ -379,34 +391,33 @@ updated_at: Mapped[datetime] = mapped_column(
 
 设计表之前，先说清楚系统要管理什么。
 
-本项目的主流程是：
+本项目当前需要管理三组职责：
 
 ```text
-创建文件夹并整理知识库
--> 创建知识库
--> 上传文档
--> 把文档切成段落
--> 给每个段落建立向量引用
+核心业务：
+文件夹、知识库、原始文件、文档、段落
+
+增强检索：
+问题、问题与段落映射、向量引用
+
+任务可靠性：
+任务、执行记录、待投递事件
 ```
 
-其中出现了五个需要管理的业务对象：
-
-```text
-知识库文件夹
-知识库
-文档
-段落
-向量引用
-```
-
-它们就成为五张候选表：
+这些有独立身份和生命周期的对象最终形成 11 张表：
 
 ```text
 KnowledgeFolderModel
 KnowledgeModel
+FileModel
 DocumentModel
 ParagraphModel
+ProblemModel
+ProblemParagraphMappingModel
 EmbeddingRefModel
+TaskModel
+TaskAttemptModel
+OutboxEventModel
 ```
 
 注意：
@@ -476,26 +487,28 @@ document.paragraphs = "段落1、段落2、段落3……"
 
 这不是绝对规则，但足够帮助初学者完成第一轮判断。
 
-### 6.4 为什么本项目没有单独的 `file` 表
+### 6.4 为什么本项目有单独的 `file` 表
 
-当前项目只保存：
-
-```text
-document.file_path
-```
-
-文件没有独立的名称、版本、权限、复用关系或处理生命周期，因此暂时只是 `DocumentModel` 的一个字段。
-
-如果以后出现下面的需求，就可以考虑拆成 `file` 表：
+当前项目使用 `FileModel` 保存原始文件元数据：
 
 ```text
-同一个文件被多个文档引用
-保存文件版本和哈希
-记录文件大小、类型和存储状态
-独立管理文件上传、删除和权限
+file.file_name
+file.file_size
+file.sha256_hash
+file.file_path
 ```
 
-这说明表结构不是越多越好，而是由业务职责决定。
+`DocumentModel.source_file_id` 通过外键指向 `file.id`。这样原始文件的名称、大小、哈希和存储位置可以独立查询，也为以后切换对象存储保留稳定边界。
+
+`document.file_path` 目前仍然存在，但只是为了兼容旧 SQLite 表中的非空字段；当前业务读取统一通过：
+
+```text
+document.source_file_id
+-> file.id
+-> file.file_path
+```
+
+这说明是否拆表取决于对象是否已有独立职责，而不是字段数量。
 
 ## 7. 如何判断表之间的关系
 
@@ -537,14 +550,16 @@ profile.user_id -> user.id
 profile.user_id 必须 unique
 ```
 
-本项目中，`Paragraph` 和 `EmbeddingRef` 在业务上按一对一使用：
+本项目中，`Problem` 和它自己的 `EmbeddingRef` 按一对一使用：
 
 ```text
-一个段落对应一条向量引用
-一条向量引用只指向一个段落
+一个问题最多对应一条问题向量引用
+一条问题向量引用最多指向一个问题
 ```
 
-当前 ORM 使用单个 `embedding_ref` 属性表达这个预期，但 `embedding_ref.paragraph_id` 还没有 `unique=True`，因此数据库层尚未严格禁止同一段落出现多条引用。
+数据库通过 `embedding_ref.problem_id` 的唯一约束保证一个问题不会重复建立多条向量引用。
+
+段落和向量引用不是一对一。一个段落既可以有自己的段落向量，也可以作为问题向量的回源段落，因此 ORM 使用 `paragraph.embedding_refs` 列表表达一对多关系。
 
 ### 7.2 一对多
 
@@ -659,7 +674,15 @@ user-001 | role-admin
 
 通常还会限制 `(user_id, role_id)` 不能重复。
 
-当前项目没有多对多关系，但以后如果出现“一个文档属于多个标签，一个标签包含多个文档”，就需要类似的 `document_tag` 中间表。
+当前项目的 `Problem` 和 `Paragraph` 已经构成多对多数据模型：
+
+```text
+Problem
+-> ProblemParagraphMapping
+-> Paragraph
+```
+
+一条问题可以关联多个段落，一个段落也可以关联多个问题。中间表还保存 `knowledge_id` 和 `document_id`，便于按知识库、文档过滤和清理映射。
 
 ### 7.5 外键放在哪里
 
@@ -673,15 +696,22 @@ user-001 | role-admin
 
 表关系首先是业务规则，`ForeignKey` 和 `relationship()` 只是把这个规则写进数据库和代码。
 
-## 8. 本项目五张表为什么这样设计
+## 8. 本项目 11 张表为什么这样设计
 
 ```text
 KnowledgeFolderModel
     ├── KnowledgeFolderModel（子文件夹）
     └── KnowledgeModel
-            └── DocumentModel
-                    └── ParagraphModel
-                            └── EmbeddingRefModel
+            ├── DocumentModel
+            │       ├── FileModel
+            │       ├── ParagraphModel
+            │       │       ├── EmbeddingRefModel
+            │       │       └── ProblemParagraphMappingModel
+            │       │               └── ProblemModel
+            │       └── TaskModel
+            │               ├── TaskAttemptModel
+            │               └── OutboxEventModel
+            └── ProblemModel
 ```
 
 业务含义：
@@ -691,28 +721,46 @@ KnowledgeFolderModel
 一个文件夹可以有多个知识库
 一个知识库也可以不属于任何文件夹
 一个知识库可以有多篇文档
+一份原始文件可以被文档引用
 一篇文档可以切成多个段落
-一个段落对应一条向量引用
+问题与段落通过映射表形成多对多关系
+段落和问题可以拥有向量引用
+一篇文档可以产生多次后台任务
+一个任务可以有多次执行记录和多条投递事件
 ```
 
-每张表只负责一种核心对象：
+每张表只负责一种对象或关联：
 
-| 表                  | 保存什么                       | 为什么独立                |
-| ------------------ | -------------------------- | -------------------- |
-| `knowledge_folder` | 文件夹信息和父目录 ID               | 需要独立管理，并通过自关联形成目录树   |
-| `knowledge`        | 知识库名称和描述                   | 文档的顶层容器              |
-| `document`         | 文件信息和处理状态                  | 可以独立上传、查询和处理         |
-| `paragraph`        | 切分后的正文和顺序                  | 一篇文档有多个段落，段落需要独立检索   |
-| `embedding_ref`    | 业务 ID 与 Chroma 向量 ID 的对应关系 | 将 SQLite 业务数据与向量存储解耦 |
+| 分组 | 表 | 保存什么 |
+|---|---|---|
+| 核心业务 | `knowledge_folder` | 文件夹信息和父目录 ID |
+| 核心业务 | `knowledge` | 知识库名称、描述和检索配置 |
+| 核心业务 | `file` | 原始文件名称、大小、哈希和路径 |
+| 核心业务 | `document` | 文档归属和当前处理状态 |
+| 核心业务 | `paragraph` | 切分后的正文、标题和顺序 |
+| 增强检索 | `problem` | 更接近用户表达的增强问题 |
+| 增强检索 | `problem_paragraph_mapping` | 问题和段落的多对多关系 |
+| 增强检索 | `embedding_ref` | 向量来源、稳定 ID 和可选 pgvector 向量 |
+| 任务可靠性 | `task` | 后台任务当前状态和执行权 |
+| 任务可靠性 | `task_attempt` | 每一次任务执行历史 |
+| 任务可靠性 | `outbox_event` | 与业务事务一起创建的待投递事件 |
 
 关键外键：
 
 ```text
 knowledge_folder.parent_id  -> knowledge_folder.id
 knowledge.folder_id         -> knowledge_folder.id
+document.source_file_id     -> file.id
 document.knowledge_id       -> knowledge.id
 paragraph.document_id       -> document.id
+problem.knowledge_id        -> knowledge.id
+mapping.problem_id          -> problem.id
+mapping.paragraph_id        -> paragraph.id
 embedding_ref.paragraph_id  -> paragraph.id
+embedding_ref.problem_id    -> problem.id
+task.document_id            -> document.id
+task_attempt.task_id        -> task.id
+outbox_event.task_id        -> task.id
 ```
 
 ### 8.1 为什么 `folder_id` 可以为空
@@ -733,15 +781,16 @@ document.status
 document.error_message
 ```
 
-它们只描述某一篇文档当前的处理结果，不需要独立查询和独立生命周期，因此直接放在 `document` 表中。
+它们仍然只描述某一篇文档当前的处理结果，因此直接放在 `document` 表中。
 
-如果以后需要保存每一次状态变化的时间和原因，可以再增加：
+当前项目另外使用任务表保存后台处理过程：
 
 ```text
-document_status_history
+task           保存当前任务状态
+task_attempt   保存每一次执行的时间、Worker 和错误
 ```
 
-这时保存的不再是“当前状态”，而是“多条历史记录”，所以适合独立表。
+`document.status` 方便文档列表直接展示，`task_attempt` 则负责回答“之前每一次执行发生了什么”。两者职责不同。
 
 ### 8.3 为什么 `paragraph` 还保存 `knowledge_id`
 
@@ -790,18 +839,20 @@ FastAPI 从 URL 中解析出：
 knowledge_id = "kb-001"
 ```
 
-随后，同一个 `knowledge_id` 参数被显式写入 `document` 和 `paragraph`：
+随后，`knowledge_id` 先写入 `document`，后台 Worker 再从这条持久化记录传给段落准备逻辑：
 
 ```mermaid
 flowchart LR
     A["上传请求<br/>/api/knowledges/kb-001/documents"]
     B["FastAPI 路径参数<br/>knowledge_id = kb-001"]
     C["DocumentModel<br/>knowledge_id = kb-001"]
-    D["ParagraphModel<br/>knowledge_id = kb-001"]
+    D["Task / Worker<br/>读取 Document"]
+    E["ParagraphModel<br/>knowledge_id = kb-001"]
 
     A --> B
     B --> C
-    B --> D
+    C --> D
+    D --> E
 ```
 
 第一步，API 接收 URL 中的路径参数，并传给 Service：
@@ -809,7 +860,7 @@ flowchart LR
 ```python
 @router.post("/api/knowledges/{knowledge_id}/documents")
 async def upload_document_api(knowledge_id: str, ...):
-    return await upload_document(
+    document, task = await create_document_task(
         db=db,
         knowledge_id=knowledge_id,
         ...,
@@ -825,7 +876,7 @@ document = DocumentModel(
 )
 ```
 
-第三步，切分段落时继续把同一个参数传入 `_prepare_document_index`：
+第三步，Worker 读取 `DocumentModel` 后，把其中的 `knowledge_id` 传入 `_prepare_document_index`：
 
 ```python
 prepared_index = _prepare_document_index(
@@ -1006,9 +1057,9 @@ refresh   从数据库重新读取对象的最新字段
 
 Session 和事务的完整说明见 `sqlalchemy-session-learning.md`。
 
-## 12. SQLite 和 Chroma 的分工
+## 12. 两套存储模式的分工
 
-本项目同时使用 SQLite 和 Chroma：
+本地默认模式：
 
 ```text
 SQLite   保存文件夹、知识库、文档、段落等业务数据
@@ -1023,7 +1074,24 @@ SQLite 中的 paragraph
 -> Chroma 中的真实向量
 ```
 
-因此，`EmbeddingRefModel` 不是向量本身，只是业务记录与 Chroma 向量之间的引用。
+此时 `embedding_ref.embedding` 为空，`EmbeddingRefModel` 主要保存业务来源和 Chroma `vector_id` 的对应关系。
+
+PostgreSQL 模式：
+
+```text
+PostgreSQL 普通列       保存业务数据和向量元数据
+pgvector 向量列         保存 embedding 并执行相似度检索
+PostgreSQL tsvector     支持关键词检索
+```
+
+此时真实向量直接保存在 `embedding_ref.embedding`，业务数据与向量可以共享同一个数据库事务。
+
+两种模式都通过 `EmbeddingRepository` 暴露统一接口。区别在于：
+
+```text
+Chroma 模式      跨两个存储，失败时需要补偿
+pgvector 模式    同一数据库事务可以整体提交或回滚
+```
 
 ## 13. 设计表关系时的步骤
 
@@ -1119,7 +1187,7 @@ Knowledge 1 -> N Document
 
 过度拆表也会增加查询和维护成本。
 
-`document.file_path` 当前只是文档的一个简单属性，没有必要为了一个路径单独创建 `file` 表。
+当前项目拆出 `file` 表，是因为原始文件已经有独立的名称、大小、哈希和存储位置。反过来，如果一个值始终只是所属对象的简单属性，就不应为了“看起来分层”强行拆表。
 
 ### 误区 4：定义 `relationship()` 就有了数据库外键
 
@@ -1139,7 +1207,7 @@ Base.metadata.create_all(bind=engine)
 
 只会创建不存在的表，不会自动给已有表增加或删除字段。
 
-本项目当前使用 `migrations.py` 补充少量 SQLite 字段；正式项目通常使用 Alembic 管理数据库迁移。
+本项目对 PostgreSQL 使用 Alembic 管理正式迁移；`migrations.py` 仅负责兼容旧 SQLite 学习数据。新增生产表或字段时，应先更新 ORM，再创建 Alembic migration。
 
 ### 误区 6：关系只需要从一个方向判断
 
@@ -1186,4 +1254,4 @@ refresh      刷新对象字段
 这个字段是否真的需要索引或重复保存？
 ```
 
-先掌握这些对应关系，再阅读 `sqlalchemy-session-learning.md`，就能继续理解业务代码如何真正读写 SQLite。
+先掌握这些对应关系，再阅读 `sqlalchemy-session-learning.md`，就能继续理解业务代码如何通过 Session 读写 SQLite 或 PostgreSQL。

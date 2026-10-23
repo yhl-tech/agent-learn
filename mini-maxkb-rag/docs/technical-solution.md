@@ -1,5 +1,7 @@
 # Mini MaxKB RAG 问答系统技术方案
 
+> 文档说明：第 1 至 8 节保留 v0.1 最小版本的设计基线，用于理解项目从哪里起步；第 9 节记录实际迭代。当前代码已完成 v0.7，支持混合检索、问题增强、PostgreSQL/pgvector、持久化任务、Celery/Redis 和 Transactional Outbox。
+
 ## 1. 项目目标
 
 本项目用于通过动手实现一个简化版知识库问答系统，理解 MaxKB 中知识库模块的核心链路。
@@ -22,7 +24,7 @@ File       -> 原始文件
 
 第一版先不追求完整复刻 MaxKB，而是优先把主链路做清楚、跑起来、能调试。
 
-## 2. 总体架构
+## 2. v0.1 总体架构
 
 推荐采用前后端分离架构：
 
@@ -42,7 +44,7 @@ FastAPI 后端
   -> 本地磁盘保存原始文件
 ```
 
-## 3. 后端技术方案
+## 3. v0.1 后端技术方案
 
 ### 3.1 技术栈
 
@@ -189,7 +191,7 @@ frontend/
       chat.ts
 ```
 
-## 5. 数据模型设计
+## 5. v0.1 数据模型设计
 
 第一版简化为 4 张业务表：
 
@@ -276,7 +278,7 @@ Embedding
 
 向量本身存放在 Chroma 中，不直接存在 SQLite。
 
-## 6. API 设计
+## 6. v0.1 API 设计
 
 第一版 API 控制在 5 个核心接口。
 
@@ -373,7 +375,7 @@ POST /api/knowledges/{knowledge_id}/chat
 }
 ```
 
-## 7. RAG 主链路
+## 7. v0.1 RAG 主链路
 
 ### 7.1 文档入库链路
 
@@ -400,7 +402,7 @@ POST /api/knowledges/{knowledge_id}/chat
 -> 返回回答和引用来源
 ```
 
-## 8. 第一版暂不实现
+## 8. v0.1 暂不实现
 
 为了避免范围过大，第一版先不做：
 
@@ -418,11 +420,11 @@ PDF / Word 解析
 文档删除后的向量清理
 ```
 
-这些能力可以在主链路跑通后逐步补齐。
+这是 v0.1 当时的范围边界。其中大部分能力已在 v0.2 至 v0.7 补齐，是否完成以第 9 节为准。
 
 ## 9. 迭代路线
 
-### 9.1 v0.1 跑通主链路
+### 9.1 v0.1 跑通主链路（已完成）
 
 目标：
 
@@ -461,7 +463,7 @@ React 工作台完成基础交互
 回答中能展示引用段落
 ```
 
-### 9.2 v0.2 二期：补齐基础管理能力
+### 9.2 v0.2 二期：补齐基础管理能力（已完成）
 
 目标：
 
@@ -525,7 +527,7 @@ chat 区域展示“无引用结果”的明确状态
 上传失败时前端能看到明确错误原因
 ```
 
-### 9.3 v0.3 三期：对齐 MaxKB 核心数据模型
+### 9.3 v0.3 三期：对齐 MaxKB 核心数据模型（已完成）
 
 目标：
 
@@ -548,7 +550,7 @@ Embedding 元数据
 ```text
 新增 knowledge_folder 表，支持多级目录
 新增 file 表，保存原始文件元数据
-document.file_path 迁移为 document.source_file_id
+document 增加 source_file_id；旧 file_path 暂留用于兼容 SQLite
 新增 problem 表，保存从段落生成的问题
 新增 problem_paragraph_mapping 表，关联问题和段落
 embedding_ref 增加 source_type，用于区分段落向量和问题向量
@@ -610,7 +612,7 @@ problem_paragraph_mapping
 提问时可以先命中问题，再回到段落
 ```
 
-### 9.4 v0.4 四期：增强检索能力
+### 9.4 v0.4 四期：增强检索能力（已完成）
 
 目标：
 
@@ -628,21 +630,23 @@ problem_paragraph_mapping
 检索参数配置
 ```
 
-技术方案：
+实际技术方案：
 
 ```text
-保留 Chroma 做向量检索
-增加 SQLite FTS5 或迁移 PostgreSQL 全文检索
+Chroma 负责本地向量检索
+SQLite FTS5 负责本地关键词检索
 实现 SearchMode：embedding / keywords / blend
-增加 rerank_service.py，对召回结果二次排序
+rerank_service.py 使用 weighted RRF 融合两路排名
+问题向量命中后通过 ProblemParagraphMapping 回到原始段落
 ```
 
 后端调整：
 
 ```text
 paragraph 增加 title 字段
-embedding_ref 增加 score_meta 字段，记录检索调试信息
-knowledge 增加 retrieval_config，保存 top_k、score_threshold、search_mode
+embedding_ref 增加 source_type、problem_id 和稳定索引元数据
+knowledge 增加 retrieval_config，保存 top_k、score_threshold、search_mode、blend_weight
+动态检索分数只随响应返回，不写回共享 embedding_ref
 ```
 
 新增 API：
@@ -668,7 +672,7 @@ POST  /api/knowledges/{knowledge_id}/retrieval-test
 可以通过参数调整召回数量和阈值
 ```
 
-### 9.5 v0.5 五期：迁移到真实项目常用存储
+### 9.5 v0.5 五期：迁移到真实项目常用存储（已完成）
 
 目标：
 
@@ -676,12 +680,12 @@ POST  /api/knowledges/{knowledge_id}/retrieval-test
 把学习版存储升级为更接近生产项目的方案。
 ```
 
-推荐技术路线：
+实际技术路线：
 
 ```text
-SQLite -> PostgreSQL
-Chroma -> PostgreSQL + pgvector
-本地文件 -> 本地文件表 + 可替换对象存储接口
+保留 SQLite + Chroma 作为零配置本地模式
+增加 PostgreSQL + pgvector + tsvector 生产模式
+新增 FileModel 和可替换文件存储边界，实体文件目前仍在本地磁盘
 ```
 
 迁移原因：
@@ -698,7 +702,7 @@ PostgreSQL 的事务能力更适合处理文档、段落、向量的一致性
 引入 Alembic 管理数据库迁移
 用 pgvector 存储 embedding
 用 PostgreSQL tsvector 做全文检索
-移除或抽象 Chroma 依赖
+用 EmbeddingRepository 抽象 Chroma 与 pgvector
 增加 repository 层，隔离数据库实现
 ```
 
@@ -723,7 +727,7 @@ backend/
 业务数据和检索索引可以通过事务保持一致
 ```
 
-### 9.6 v0.6 六期：任务队列和异步处理
+### 9.6 v0.6 六期：持久化后台任务（已完成）
 
 目标：
 
@@ -741,18 +745,13 @@ backend/
 任务取消
 ```
 
-技术方案：
+实际技术方案：
 
 ```text
-Celery + Redis
-或 FastAPI BackgroundTasks 作为过渡方案
-```
-
-推荐路线：
-
-```text
-学习阶段先用 FastAPI BackgroundTasks
-需要更贴近真实项目时再切到 Celery + Redis
+新增 task 表，数据库持久化任务状态
+上传接口返回 202 Accepted 和 task_id
+本地后台执行器异步完成文档索引
+支持状态查询、失败重试和软取消
 ```
 
 后端调整：
@@ -772,15 +771,64 @@ document.status 不再只靠接口同步更新，而是由任务更新
 失败任务可以重新执行
 ```
 
-### 9.7 v0.7 七期：模型管理和多模型支持
+### 9.7 v0.7 七期：Celery 与可靠任务投递（已完成）
 
 目标：
 
 ```text
-把 embedding 模型和 chat 模型从硬编码改成可配置。
+把 v0.6 单机后台任务升级为可独立部署、可恢复、可审计的任务系统。
 ```
 
 功能范围：
+
+```text
+Celery + Redis Broker
+Transactional Outbox
+至少一次消息投递
+TaskAttempt 执行历史
+attempt 条件认领
+lease + heartbeat
+自动重试和人工重试
+软取消
+稳定向量 ID 和幂等 upsert
+```
+
+后端调整：
+
+```text
+新增 task_attempt 和 outbox_event 表
+Task 增加 attempt_no、worker_id、lease、heartbeat 和 next_retry_at
+上传和重试事务同时写入 Task 与 OutboxEvent
+独立 Relay 把 Outbox 事件发布到 Celery
+Worker 只接收 task_id + attempt_no，并先条件认领
+Celery 启用 late ack、Worker 丢失重投和单任务预取
+本地 background 模式复用同一套 Outbox 与状态机
+```
+
+可靠性边界：
+
+```text
+数据库是任务状态的唯一事实来源
+Redis/Celery 只负责至少一次消息传递
+重复消息由 attempt 条件认领拒绝
+重复执行由稳定 UUID + upsert 收敛
+pgvector 依赖事务回滚，Chroma 失败时执行补偿删除
+```
+
+验收标准：
+
+```text
+上传事务提交后即使 Web 进程退出，Outbox 仍可补发
+发布成功但回写失败时允许重复投递且不会重复建索引
+旧 attempt 消息不能执行新一轮任务
+Worker 失联后可以通过租约过期接管
+临时错误按指数退避自动重试
+取消请求以数据库标记为准
+```
+
+### 9.8 后续：模型管理和多模型支持（未实现）
+
+原 v0.7 的模型管理目标顺延到后续版本：
 
 ```text
 模型供应商配置
@@ -788,37 +836,10 @@ embedding 模型配置
 chat 模型配置
 知识库绑定 embedding 模型
 问答时选择 chat 模型
+密钥安全托管和连接测试
 ```
 
-后端调整：
-
-```text
-新增 model_provider 表
-新增 model 表
-knowledge 增加 embedding_model_id
-chat 请求支持 model_id
-embedding_service 和 chat_service 改成按模型配置动态调用
-```
-
-前端调整：
-
-```text
-增加模型管理页面
-知识库创建时选择 embedding 模型
-问答区可选择 chat 模型
-模型配置支持测试连接
-```
-
-验收标准：
-
-```text
-可以配置至少一个 OpenAI-compatible 供应商
-不同知识库可以使用不同 embedding 模型
-问答时可以切换 chat 模型
-模型连接失败时有明确错误提示
-```
-
-### 9.8 v1.0 目标版本：形成完整学习版 MaxKB
+### 9.9 v1.0 目标版本：形成完整学习版 MaxKB
 
 目标：
 
@@ -838,10 +859,10 @@ embedding_service 和 chat_service 改成按模型配置动态调用
 全文检索
 混合检索
 问题增强召回
-模型管理
 异步任务
 问答引用
 检索测试
+后续模型管理
 ```
 
 不作为 v1.0 目标：
@@ -865,8 +886,9 @@ v1.0 的核心价值不是功能数量，而是能把 MaxKB 的核心源码概�
 v0.1-v0.4:
   SQLite + Chroma
 
-v0.5:
-  PostgreSQL + pgvector + tsvector
+v0.5 起:
+  本地保留 SQLite + Chroma
+  生产支持 PostgreSQL + pgvector + tsvector
 
 生产化方向:
   PostgreSQL 保存业务数据
@@ -884,7 +906,7 @@ v0.5:
   向量检索 + 关键词检索
 
 第三阶段:
-  混合检索 + rerank
+  混合检索 + weighted RRF（当前已完成）
 
 第四阶段:
   查询改写、多路召回、上下文压缩
@@ -900,7 +922,7 @@ v0.5:
   service/repository 分层
 
 第三阶段:
-  异步任务队列
+  持久化任务 + Celery + Transactional Outbox（当前已完成）
 
 第四阶段:
   可观测性、日志、指标、错误追踪
@@ -935,6 +957,12 @@ v0.4 后:
 v0.5 后:
   VectorField
   PostgreSQL pgvector 相关 SQL
+
+v0.6-v0.7 后:
+  异步文档任务
+  Celery Worker
+  Transactional Outbox
+  幂等、租约、心跳和失败重试
 ```
 
 ## 11. 企业级生产化差距与升级路线
@@ -951,14 +979,14 @@ v0.5 后:
 
 | 维度 | 当前方案 | 企业级生产常见方案 |
 |---|---|---|
-| 业务数据库 | SQLite | PostgreSQL / MySQL，配合备份、迁移、主从或高可用 |
-| 向量索引 | Chroma | pgvector / Milvus / Qdrant / Elasticsearch |
+| 业务数据库 | 本地 SQLite；生产模式支持 PostgreSQL + Alembic | PostgreSQL / MySQL，配合备份、迁移、主从或高可用 |
+| 向量索引 | 本地 Chroma；PostgreSQL 模式支持 pgvector/HNSW | pgvector / Milvus / Qdrant / Elasticsearch |
 | 文件存储 | 本地磁盘 | S3 / OSS / TOS / MinIO |
-| 任务处理 | 同步处理或轻量后台任务 | Celery / RQ / MQ / Kafka，支持重试和补偿 |
+| 任务处理 | background 或 Celery/Redis + Transactional Outbox | 独立 Worker 集群、队列监控、死信治理和容量规划 |
 | 权限体系 | 单用户 | 用户、组织、工作空间、角色、资源权限 |
 | 模型管理 | 简化配置 | 多供应商、多模型、密钥托管、调用限流 |
-| 检索能力 | 纯向量检索为主 | 向量检索、全文检索、混合检索、rerank、召回评估 |
-| 数据一致性 | 简化处理 | 事务、幂等、失败回滚、补偿任务 |
+| 检索能力 | 向量、全文、问题增强、weighted RRF | Cross-Encoder/LLM rerank、查询改写、召回评估 |
+| 数据一致性 | 数据库事务、Outbox、幂等 upsert、Chroma 补偿 | 对账修复、死信重放、跨服务一致性治理 |
 | 可观测性 | 基础日志 | 结构化日志、trace、metrics、告警 |
 | 部署方式 | 本地启动 | Docker、CI/CD、Kubernetes、环境隔离 |
 | 安全能力 | 基础校验 | 鉴权、审计、文件安全扫描、敏感信息保护 |
@@ -968,12 +996,11 @@ v0.5 后:
 建议按下面顺序推进，不要一开始就把所有企业级能力堆进去。
 
 ```text
-第一步：数据存储生产化
-  SQLite -> PostgreSQL
-  Chroma -> pgvector 或独立向量数据库
+第一步：数据存储生产化（已具备 PostgreSQL/pgvector 基线）
+  本地 SQLite/Chroma -> 生产 PostgreSQL/pgvector
   本地文件 -> 对象存储接口
 
-第二步：任务处理生产化
+第二步：任务处理生产化（已具备 Celery/Outbox 基线）
   上传接口只创建任务
   文档解析、切分、向量化异步执行
   支持失败重试、任务取消、任务状态查询
@@ -983,10 +1010,9 @@ v0.5 后:
   知识库、文档、文件按工作空间隔离
   API 层做鉴权和权限校验
 
-第四步：检索质量提升
-  增加全文检索
-  增加混合检索
-  增加 rerank
+第四步：检索质量提升（已具备混合召回和 weighted RRF）
+  增加 Cross-Encoder 或 LLM rerank
+  增加查询改写和上下文压缩
   增加检索测试和效果评估
 
 第五步：可观测性和运维
@@ -1021,10 +1047,10 @@ PostgreSQL
   -> 业务数据
   -> pgvector 向量索引
   -> tsvector 全文检索索引
+  -> Task / TaskAttempt / OutboxEvent
 
 Redis / MQ
-  -> 异步任务队列
-  -> 任务状态缓存
+  -> 至少一次消息传递
 
 Worker
   -> 文档解析
@@ -1052,7 +1078,7 @@ v0.1-v0.4:
   用低成本技术跑通 RAG 和检索链路
 
 v0.5-v0.7:
-  引入真实项目常见的存储、任务和模型管理
+  引入 PostgreSQL/pgvector、持久化任务和可靠消息投递
 
 v1.0:
   形成结构完整、能对照 MaxKB 源码学习的工程化版本
@@ -1065,23 +1091,12 @@ v1.0:
 
 ## 12. 推荐下一步
 
-下一步先创建项目骨架：
+当前 v0.7 主链路已经完成，后续优先级是：
 
 ```text
-mini-maxkb-rag/
-  backend/
-  frontend/
-  docs/
+1. 模型管理与多模型配置
+2. 对象存储适配，支持多节点共享原始文件
+3. 任务与 Outbox 的指标、告警、归档和死信治理
+4. Cross-Encoder/LLM rerank、查询改写和离线召回评估
+5. 用户、工作空间与资源权限
 ```
-
-然后优先实现后端：
-
-```text
-SQLite 表结构
-文档上传接口
-文本切分服务
-Chroma 写入和查询
-chat 接口
-```
-
-后端主链路跑通后，再接前端页面。

@@ -10,14 +10,17 @@
 接收 HTTP 文件
 校验知识库
 保存文件
-读取文本
-切分文本
-写 Document 表
-写 Paragraph 表
-生成向量
-写入 Chroma
+写 File、Document、Task、OutboxEvent
 提交事务
 返回响应
+
+后台 Relay 和 Worker 随后：
+发布任务
+读取文本
+切分文本
+生成向量
+通过 Repository 写入索引
+更新任务状态
 ```
 
 如果这些逻辑全部堆在 `document_api.py` 里，接口层会非常重。
@@ -44,7 +47,9 @@
 ```text
 api       接收 HTTP 请求，处理参数和 HTTP 错误
 services 组织业务流程
-storage  封装文件系统、Chroma 等外部存储
+repositories 封装数据库查询和可替换的向量仓库协议
+storage  封装文件系统、Chroma 等具体外部存储
+tasks    提供 Celery 任务入口
 models   定义数据库表结构
 schemas  定义 API 入参和出参
 config   集中读取配置和路径
@@ -56,7 +61,9 @@ database 管理数据库 engine、Session、建表
 ```text
 backend/app/api/
 backend/app/services/
+backend/app/repositories/
 backend/app/storage/
+backend/app/tasks/
 backend/app/models.py
 backend/app/schemas.py
 backend/app/config.py
@@ -96,7 +103,7 @@ async def chat_api(
     payload: ChatRequest,
     db: Session = Depends(get_db),
     embedding_service: HashEmbeddingService = Depends(get_embedding_service),
-    vector_store: ChromaVectorStore = Depends(get_vector_store),
+    vector_store: EmbeddingRepository = Depends(get_embedding_repository),
 ):
 ```
 
@@ -114,7 +121,7 @@ async def chat_api(
 ```text
 怎么切分文本
 怎么计算 embedding
-怎么调用 Chroma
+怎么调用 Chroma 或 pgvector
 怎么组装 prompt
 ```
 
@@ -131,6 +138,8 @@ backend/app/services/chunk_service.py
 backend/app/services/embedding_service.py
 backend/app/services/retrieval_service.py
 backend/app/services/chat_service.py
+backend/app/services/task_service.py
+backend/app/services/outbox_service.py
 ```
 
 `services` 层负责业务流程。
@@ -143,22 +152,30 @@ backend/app/services/chat_service.py
 失败时业务上应该怎么处理？
 ```
 
-例如 `upload_document`：
+例如上传接口的受理阶段：
 
 ```text
 查知识库
 -> 保存文件
--> 读取文本
--> 切分
+-> 创建 File
 -> 创建 Document
--> 创建 Paragraph
--> 生成向量
--> 写 Chroma
--> 创建 EmbeddingRef
--> commit
+-> 创建 Task
+-> 创建 OutboxEvent
+-> 同一事务 commit
 ```
 
-这就是业务编排。
+耗时索引由 `task_service` 调用 `process_pending_document` 完成：
+
+```text
+条件认领 Task
+-> 读取文件
+-> 切分
+-> 生成向量
+-> 通过 EmbeddingRepository upsert
+-> 更新 Document、Task 和 TaskAttempt
+```
+
+这两段都是业务编排。
 
 `document_service.py` 本身不应该知道 HTTP 状态码。
 
@@ -185,11 +202,12 @@ backend/app/storage/vector_store.py
 
 `storage` 层负责外部存储的具体操作。
 
-本项目有两类外部存储：
+本项目的具体外部存储包括：
 
 ```text
 本地文件系统
-ChromaDB 向量库
+ChromaDB（SQLite 本地模式）
+Redis（Celery Broker）
 ```
 
 文件存储封装：
@@ -199,12 +217,12 @@ save_upload_file(knowledge_id, upload_file)
 read_text_file(file_path)
 ```
 
-向量库封装：
+Chroma 适配器：
 
 ```python
-ChromaVectorStore.add_paragraphs(...)
-ChromaVectorStore.search(...)
-ChromaVectorStore.delete_by_document(...)
+ChromaEmbeddingRepository.upsert_paragraphs(...)
+ChromaEmbeddingRepository.search(...)
+ChromaEmbeddingRepository.delete_by_document(...)
 ```
 
 这样 service 层不用直接写：
@@ -219,6 +237,25 @@ collection.query
 
 它只调用更稳定的业务接口。
 
+### 5.1 `repositories` 层负责什么
+
+目录：
+
+```text
+backend/app/repositories/
+```
+
+Repository 隔离业务逻辑与具体查询实现：
+
+```text
+document_repository.py    文档查询
+paragraph_repository.py   关键词检索
+embedding_repository.py   向量仓库协议和 pgvector 实现
+outbox_repository.py      Outbox 条件认领和状态更新
+```
+
+业务 service 依赖 `EmbeddingRepository`，而不是直接依赖 Chroma。配置为 PostgreSQL 时使用 `PostgresEmbeddingRepository`，配置为本地 SQLite 时使用 `ChromaEmbeddingRepository`。
+
 ## 6. `models` 负责什么
 
 文件：
@@ -229,21 +266,22 @@ backend/app/models.py
 
 SQLAlchemy Model 描述数据库怎么存。
 
-本项目的表：
+本项目的 11 张表：
 
 ```text
-KnowledgeModel      知识库
-DocumentModel       文档
-ParagraphModel      段落
-EmbeddingRefModel   向量引用
+核心业务    KnowledgeFolder / Knowledge / File / Document / Paragraph
+增强检索    Problem / ProblemParagraphMapping / EmbeddingRef
+任务可靠性  Task / TaskAttempt / OutboxEvent
 ```
 
-关系：
+典型关系：
 
 ```text
 KnowledgeModel 1 -> N DocumentModel
 DocumentModel  1 -> N ParagraphModel
-ParagraphModel 1 -> 1 EmbeddingRefModel
+ProblemModel   N <-> N ParagraphModel（通过 Mapping）
+DocumentModel  1 -> N TaskModel
+TaskModel      1 -> N TaskAttemptModel / OutboxEventModel
 ```
 
 核心字段：
@@ -252,7 +290,7 @@ ParagraphModel 1 -> 1 EmbeddingRefModel
 knowledge_id    数据属于哪个知识库
 document_id     段落属于哪个文档
 paragraph_id    向量引用对应哪个段落
-vector_id       Chroma 中的向量 ID
+vector_id       跨向量后端稳定的向量 ID
 ```
 
 Model 层回答的是：
@@ -386,7 +424,7 @@ backend/app/dependencies.py
 
 ```python
 get_embedding_service()
-get_vector_store()
+get_embedding_repository()
 ```
 
 它们用了：
@@ -400,7 +438,7 @@ get_vector_store()
 ```text
 第一次调用时创建对象
 后续请求复用同一个对象
-避免每个请求都重新初始化 Chroma
+避免每个请求都重新初始化仓库或 Chroma 客户端
 ```
 
 这类对象不属于单个 HTTP 请求。
@@ -416,17 +454,21 @@ get_vector_store()
 
 ## 11. 分层之间怎么调用
 
-以文档上传为例：
+以文档上传和后台索引为例：
 
 ```text
 document_api.py
--> document_service.upload_document
+-> document_service.create_document_task
 -> file_storage.save_upload_file
+-> models.File / Document / Task / OutboxEvent
+-> outbox_relay.py
+-> tasks/document_tasks.py
+-> task_service.run_document_task
 -> file_storage.read_text_file
 -> chunk_service.split_text
 -> embedding_service.embed_texts
--> vector_store.add_paragraphs
--> models.DocumentModel / ParagraphModel / EmbeddingRefModel
+-> EmbeddingRepository.upsert_paragraphs
+-> models.Paragraph / EmbeddingRef / TaskAttempt
 ```
 
 以问答为例：
@@ -435,8 +477,10 @@ document_api.py
 chat_api.py
 -> knowledge_service.get_knowledge
 -> retrieval_service.retrieve_paragraphs
--> embedding_service.embed_text
--> vector_store.search
+-> embedding_service.embed_text（embedding / blend 模式）
+-> EmbeddingRepository.search
+-> paragraph_repository.search_paragraphs_by_keywords
+-> rerank_service
 -> models.ParagraphModel / DocumentModel
 -> chat_service.answer_question
 -> schemas.ChatResponse
@@ -452,6 +496,9 @@ chat_api.py
 
 和业务步骤编排有关吗？
 放 services。
+
+和数据库查询或可替换存储协议有关吗？
+放 repositories。
 
 和文件系统、Chroma、外部 API 的具体调用有关吗？
 放 storage 或专门 client。
@@ -495,9 +542,11 @@ chat_api.py
 误区三：service 直接散落外部库细节。
 
 ```text
-如果到处都直接调用 Chroma API，
+如果业务代码到处直接调用 Chroma API，
 以后切换 pgvector 会很难改。
 ```
+
+当前项目通过 `EmbeddingRepository` 隔离了这个差异。
 
 误区四：配置分散在各个文件。
 

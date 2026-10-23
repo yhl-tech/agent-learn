@@ -10,6 +10,7 @@
 POST /api/knowledges
 GET  /api/knowledges
 POST /api/knowledges/{knowledge_id}/documents
+GET  /api/tasks/{task_id}
 POST /api/knowledges/{knowledge_id}/chat
 ```
 
@@ -18,7 +19,8 @@ POST /api/knowledges/{knowledge_id}/chat
 ```text
 create_knowledge(...)
 list_knowledges(...)
-upload_document(...)
+create_document_task(...)
+get_task(...)
 retrieve_paragraphs(...)
 answer_question(...)
 ```
@@ -37,27 +39,36 @@ FastAPI 接口层就是两者之间的适配层。
 
 ## 2. 本项目接口文件
 
-本项目有三个主要 API 文件：
+本项目主要有这些 API 文件：
 
 ```text
+backend/app/api/knowledge_folder_api.py
 backend/app/api/knowledge_api.py
 backend/app/api/document_api.py
+backend/app/api/problem_api.py
+backend/app/api/task_api.py
 backend/app/api/chat_api.py
 ```
 
 对应能力：
 
 ```text
-knowledge_api.py   创建知识库、查询知识库列表
-document_api.py    上传文档、查询文档、查询段落
-chat_api.py        知识库问答
+knowledge_folder_api.py   管理文件夹树
+knowledge_api.py          管理知识库和检索配置
+document_api.py           上传、查询、删除和重新索引文档
+problem_api.py            管理问题增强数据
+task_api.py               查询、重试和取消后台任务
+chat_api.py               知识库问答和检索测试
 ```
 
 启动时在 `main.py` 注册：
 
 ```python
+app.include_router(knowledge_folder_router)
 app.include_router(knowledge_router)
 app.include_router(document_router)
+app.include_router(problem_router)
+app.include_router(task_router)
 app.include_router(chat_router)
 ```
 
@@ -130,11 +141,13 @@ path   = /{knowledge_id}/chat
 @router.delete(...)  删除资源
 ```
 
-本项目目前主要用了：
+本项目使用了：
 
 ```text
 GET
 POST
+PATCH
+DELETE
 ```
 
 ## 5. 参数从哪里来
@@ -147,7 +160,7 @@ async def chat_api(
     payload: ChatRequest,
     db: Session = Depends(get_db),
     embedding_service: HashEmbeddingService = Depends(get_embedding_service),
-    vector_store: ChromaVectorStore = Depends(get_vector_store),
+    vector_store: EmbeddingRepository = Depends(get_embedding_repository),
 ):
 ```
 
@@ -183,7 +196,7 @@ Depends(get_embedding_service)
 `vector_store` 来自依赖注入：
 
 ```python
-Depends(get_vector_store)
+Depends(get_embedding_repository)
 ```
 
 总结：
@@ -201,7 +214,10 @@ Depends(...) -> FastAPI 自动创建或获取
 ```python
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    top_k: int = Field(default=4, ge=1, le=20)
+    top_k: Optional[int] = Field(default=None, ge=1, le=20)
+    score_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    search_mode: Optional[Literal["embedding", "keywords", "blend"]] = None
+    blend_weight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 ```
 
 这意味着前端必须传：
@@ -210,10 +226,11 @@ class ChatRequest(BaseModel):
 question 是字符串
 question 长度至少 1
 question 长度最多 2000
-top_k 是整数
+top_k 不传时使用知识库配置或系统默认值
 top_k 最小 1
 top_k 最大 20
-top_k 不传时默认 4
+score_threshold 和 blend_weight 在 0 到 1 之间
+search_mode 只能是 embedding、keywords 或 blend
 ```
 
 如果前端传错：
@@ -323,7 +340,11 @@ if knowledge is None:
 
 ```python
 try:
-    return await upload_document(...)
+    document, task = await create_document_task(...)
+    return DocumentUploadRead(
+        **DocumentRead.model_validate(document).model_dump(),
+        task=task,
+    )
 except ValueError as error:
     raise HTTPException(status_code=400, detail=str(error)) from error
 ```
@@ -349,6 +370,15 @@ raise HTTPException(status_code=502, detail=f"生成回答失败：{error}") fro
 ```
 
 ## 10. 本项目有哪些接口
+
+文件夹管理：
+
+```text
+POST   /api/knowledge-folders
+GET    /api/knowledge-folders
+PATCH  /api/knowledge-folders/{folder_id}
+DELETE /api/knowledge-folders/{folder_id}
+```
 
 创建知识库：
 
@@ -396,7 +426,8 @@ POST /api/knowledges/{knowledge_id}/documents
 响应：
 
 ```text
-DocumentRead
+202 Accepted
+DocumentUploadRead（文档字段 + TaskRead）
 ```
 
 查询知识库下文档：
@@ -421,6 +452,38 @@ GET /api/documents/{document_id}/paragraphs
 
 ```text
 list[ParagraphRead]
+```
+
+文档管理：
+
+```text
+GET    /api/documents/{document_id}/file
+DELETE /api/documents/{document_id}
+POST   /api/documents/{document_id}/reindex
+```
+
+问题增强：
+
+```text
+POST   /api/paragraphs/{paragraph_id}/problems
+GET    /api/paragraphs/{paragraph_id}/problems
+DELETE /api/problems/{problem_id}
+```
+
+后台任务：
+
+```text
+GET  /api/tasks/{task_id}
+POST /api/tasks/{task_id}/retry
+POST /api/tasks/{task_id}/cancel
+```
+
+知识库配置与检索测试：
+
+```text
+PATCH /api/knowledges/{knowledge_id}/folder
+PATCH /api/knowledges/{knowledge_id}/retrieval-config
+POST  /api/knowledges/{knowledge_id}/retrieval-test
 ```
 
 知识库问答：
@@ -532,7 +595,7 @@ service 层应该做：
 调用 chat
 ```
 
-例如 `chat_api` 不直接调用 Chroma。
+例如 `chat_api` 不直接调用 Chroma 或 pgvector。
 
 它调用：
 
@@ -568,8 +631,8 @@ FastAPI          app = create_app()
 APIRouter        knowledge_router / document_router / chat_router
 path parameter   knowledge_id / document_id
 request body     KnowledgeCreate / ChatRequest
-response_model   KnowledgeRead / DocumentRead / ChatResponse
-Depends          get_db / get_embedding_service / get_vector_store
+response_model   KnowledgeRead / DocumentUploadRead / TaskRead / ChatResponse
+Depends          get_db / get_embedding_service / get_embedding_repository
 ```
 
 ## 15. `Depends` 到底做了什么

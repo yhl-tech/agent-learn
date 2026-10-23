@@ -80,11 +80,14 @@ sessionmaker       创建 Session 工厂
 SessionLocal()     创建一个真正的 Session
 ```
 
-本项目默认使用 SQLite：
+本项目默认使用 SQLite，也可以通过 `DATABASE_URL` 切换到 PostgreSQL：
 
 ```text
-sqlite:///backend/data/app.db
+本地默认      sqlite:///backend/data/app.db
+生产模式      postgresql+psycopg://...
 ```
+
+数据库类型改变后，创建 Session 和操作 ORM 的基本方式不变；数据库迁移和向量存储实现会随配置切换。
 
 ## 4. `connect_args` 是什么
 
@@ -186,54 +189,46 @@ KnowledgeModel(id="...", name="默认知识库", ...)
 
 ## 7. 本项目有哪些表
 
-知识库表：
+当前 ORM 共 11 张表，可以按职责分成三组：
 
 ```text
+核心业务：
+KnowledgeFolderModel
 KnowledgeModel
-```
-
-作用：
-
-```text
-RAG 数据的顶层容器。
-```
-
-文档表：
-
-```text
+FileModel
 DocumentModel
-```
-
-作用：
-
-```text
-记录上传的文件、文件路径、字符长度。
-```
-
-段落表：
-
-```text
 ParagraphModel
-```
 
-作用：
-
-```text
-记录文档切分后的 chunk。
-它是 RAG 检索的核心业务单位。
-```
-
-向量引用表：
-
-```text
+增强检索：
+ProblemModel
+ProblemParagraphMappingModel
 EmbeddingRefModel
+
+任务可靠性：
+TaskModel
+TaskAttemptModel
+OutboxEventModel
 ```
 
-作用：
+其中：
 
 ```text
-记录 paragraph_id 和 Chroma vector_id 的对应关系。
-真正的 embedding 向量不存 SQLite，而是存 Chroma。
+FileModel
+保存原始文件名称、大小、哈希和路径。
+
+ParagraphModel
+保存文档切分后的 chunk，是 RAG 检索的核心业务单位。
+
+ProblemParagraphMappingModel
+保存增强问题与原始段落之间的多对多关系。
+
+EmbeddingRefModel
+保存向量来源和稳定 vector_id。
+SQLite + Chroma 模式下真实向量在 Chroma；
+PostgreSQL + pgvector 模式下真实向量在 embedding 列。
+
+TaskModel / TaskAttemptModel / OutboxEventModel
+分别保存任务当前状态、每次执行历史和待投递消息。
 ```
 
 ## 8. 外键和关系
@@ -383,11 +378,17 @@ db.commit()
 
 ## 12. `flush` 和 `commit`
 
-文档入库时：
+上传接口创建待处理文档时：
 
 ```python
+db.add(source_file)
+db.flush()
 db.add(document)
 db.flush()
+db.add(task)
+db.flush()
+db.add(outbox_event)
+db.commit()
 ```
 
 为什么这里不用马上 `commit`？
@@ -395,12 +396,13 @@ db.flush()
 因为后面还要创建：
 
 ```text
-paragraph
-embedding_ref
-Chroma 向量
+File
+PENDING Document
+PENDING Task
+PENDING OutboxEvent
 ```
 
-这些步骤属于同一次文档入库流程。
+这些记录必须一起成功或一起失败。只有提交以后，上传接口才返回已经可靠受理的任务。
 
 `flush` 的作用：
 
@@ -416,18 +418,20 @@ Chroma 向量
 正式提交事务，让变更持久生效
 ```
 
-本项目上传文档时需要先 `flush()`，因为后面要用：
+本项目上传事务先使用 `flush()`，因为后面的记录需要引用前面生成的：
 
 ```text
+source_file.id
 document.id
-paragraph.id
+task.id
 ```
 
-去构造：
+Worker 随后在另一个 Session 中执行索引，创建：
 
 ```text
-metadata
+ParagraphModel
 EmbeddingRefModel
+TaskAttemptModel
 ```
 
 ## 13. `refresh` 是什么
@@ -464,42 +468,43 @@ Session 可以理解成：
 一组数据库操作的工作区。
 ```
 
-在同一个 Session 里可以：
+上传请求的 Session 在同一个事务里：
 
 ```text
+新增 file
 新增 document
-新增 paragraphs
-新增 embedding_refs
+新增 task
+新增 outbox_event
 最后统一 commit
 ```
 
-如果中间出错，理论上可以 rollback。
+如果中间出错，代码会显式 `rollback()`，并补偿删除已经写到磁盘的实体文件。
 
-本项目当前上传链路没有显式 `rollback`，但它通过“最后才 commit”的方式避免过早提交。
-
-需要注意：
+Worker 处理索引时使用另一个事务：
 
 ```text
-Chroma 写入不是 SQLite 事务的一部分。
+认领 Task 后先提交执行权
+-> 在新事务中写 Paragraph、EmbeddingRef 和文档结果
+-> 同时把 Task 和 TaskAttempt 更新为终态
 ```
 
-也就是说：
+向量一致性取决于存储模式。
+
+PostgreSQL + pgvector：
 
 ```text
-SQLite commit 和 Chroma add 不是同一个原子事务。
+业务表和 embedding 向量位于同一个数据库事务。
+执行失败时 rollback 可以一起撤销。
 ```
 
-这是学习项目的简化点。
-
-真实系统通常会引入：
+SQLite + Chroma：
 
 ```text
-异步任务
-状态字段
-失败重试
-补偿删除
-索引重建
+SQLite commit 和 Chroma upsert 不是同一个原子事务。
+失败或取消时，代码需要按稳定 vector_id 补偿删除 Chroma 向量。
 ```
+
+任务投递也跨越数据库和 Redis。项目使用 Transactional Outbox 保证 Task 与待投递事件同事务落库，再由 Relay 至少一次发布。完整说明见 `async-task-outbox-learning.md`。
 
 ## 15. Session 生命周期
 
@@ -563,12 +568,12 @@ Refresh       从数据库刷新对象
 ```text
 Engine        engine
 Session       db
-Model         KnowledgeModel / DocumentModel / ParagraphModel / EmbeddingRefModel
+Model         业务、检索、任务三组共 11 个 ORM Model
 Primary Key   id
-Foreign Key   knowledge_id / document_id / paragraph_id
+Foreign Key   knowledge_id / document_id / paragraph_id / task_id
 Index         index=True
-Flush         上传文档时生成 document.id 和 paragraph.id
-Commit        创建知识库、上传文档最终落库
+Flush         在事务内生成 ID，供后续关联记录引用
+Commit        原子提交上传数据，或提交一次任务状态转换
 ```
 
 ## 17. 最小记忆模型

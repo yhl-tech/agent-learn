@@ -32,8 +32,11 @@ Model 是数据库合同，Schema 是接口合同。
 id
 knowledge_id
 name
+source_file_id
 file_path
 char_length
+status
+error_message
 created_at
 updated_at
 ```
@@ -44,8 +47,12 @@ updated_at
 class DocumentRead(BaseModel):
     id: str
     knowledge_id: str
+    source_file_id: Optional[str]
     name: str
     char_length: int
+    paragraph_count: int
+    status: str
+    error_message: Optional[str]
     created_at: datetime
     updated_at: datetime
 ```
@@ -75,6 +82,7 @@ API 对外结构
 class KnowledgeCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     description: str = ""
+    folder_id: Optional[str] = None
 ```
 
 它表示：
@@ -85,6 +93,7 @@ name 长度至少 1
 name 长度最多 150
 description 是字符串
 description 不传时默认为空字符串
+folder_id 可选，不传表示知识库位于根级
 ```
 
 前端请求：
@@ -116,14 +125,17 @@ payload.description
 ```python
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    top_k: int = Field(default=4, ge=1, le=20)
+    top_k: Optional[int] = Field(default=None, ge=1, le=20)
+    score_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    search_mode: Optional[Literal["embedding", "keywords", "blend"]] = None
+    blend_weight: Optional[float] = Field(default=None, ge=0.0, le=1.0)
 ```
 
 字段含义：
 
 ```text
 question  用户问题
-top_k     最多召回多少个段落
+其余字段  可选地覆盖知识库保存的检索配置
 ```
 
 校验规则：
@@ -131,9 +143,11 @@ top_k     最多召回多少个段落
 ```text
 question 不能为空
 question 最多 2000 个字符
-top_k 默认 4
+top_k 不传时使用知识库配置或系统默认值
 top_k 最小 1
 top_k 最大 20
+score_threshold 和 blend_weight 必须在 0 到 1 之间
+search_mode 只能是 embedding、keywords 或 blend
 ```
 
 合法请求：
@@ -170,7 +184,7 @@ top_k 最大 20
 
 ```python
 name: str = Field(min_length=1, max_length=150)
-top_k: int = Field(default=4, ge=1, le=20)
+top_k: Optional[int] = Field(default=None, ge=1, le=20)
 ```
 
 常见参数：
@@ -186,14 +200,14 @@ le           less or equal，小于等于
 所以：
 
 ```python
-top_k: int = Field(default=4, ge=1, le=20)
+top_k: Optional[int] = Field(default=None, ge=1, le=20)
 ```
 
 可以读成：
 
 ```text
-top_k 是整数
-默认是 4
+top_k 是可选整数
+默认是 None，表示不覆盖知识库配置
 必须大于等于 1
 必须小于等于 20
 ```
@@ -228,6 +242,8 @@ class ReferenceRead(BaseModel):
     paragraph_id: str
     content: str
     score: float
+    match_type: str
+    score_meta: dict = Field(default_factory=dict)
 ```
 
 它告诉前端：
@@ -237,6 +253,8 @@ class ReferenceRead(BaseModel):
 来自哪个段落
 引用原文是什么
 相似度分数是多少
+通过哪种检索通道命中
+各路原始分数和排名是什么
 ```
 
 ## 7. `response_model` 和 Schema 的关系
@@ -265,19 +283,25 @@ FastAPI 会根据 `response_model`：
 例如上传文档接口：
 
 ```python
-@router.post("/api/knowledges/{knowledge_id}/documents", response_model=DocumentRead)
+@router.post(
+    "/api/knowledges/{knowledge_id}/documents",
+    response_model=DocumentUploadRead,
+    status_code=202,
+)
 ```
 
-service 返回的是：
+响应在文档字段之外还包含：
 
 ```text
-DocumentModel
+task: TaskRead
 ```
+
+前端可以先展示 `PENDING` 文档，再使用 `task.id` 查询异步索引结果。
 
 接口响应会按：
 
 ```text
-DocumentRead
+DocumentUploadRead
 ```
 
 输出给前端。
@@ -436,8 +460,13 @@ KnowledgeCreate
 
 ```text
 KnowledgeRead
+KnowledgeFolderRead
 DocumentRead
+DocumentUploadRead
+FileRead
 ParagraphRead
+ProblemRead
+TaskRead
 ReferenceRead
 ```
 
@@ -445,12 +474,15 @@ ReferenceRead
 
 ```text
 ChatRequest
+ProblemCreate
+RetrievalConfigUpdate
 ```
 
 动作响应类：
 
 ```text
 ChatResponse
+RetrievalTestResponse
 ```
 
 命名习惯：
@@ -483,7 +515,7 @@ Schema 负责数据结构和校验。
 ```python
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1, max_length=2000)
-    top_k: int = Field(default=4, ge=1, le=20)
+    top_k: Optional[int] = Field(default=None, ge=1, le=20)
 ```
 
 它只说明：
