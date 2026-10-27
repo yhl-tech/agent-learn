@@ -20,37 +20,40 @@
 5. pydantic-schema-learning.md
    理解 API 入参、出参和 Field 校验。
 
-6. database-orm-basics-learning.md
+6. langchain-openai-pydantic-learning.md
+   理解 Agent 脚本中 langchain_openai、pydantic、dotenv 的职责。
+
+7. database-orm-basics-learning.md
    理解表、行、字段如何映射为 ORM 模型类、属性和实例。
 
-7. sqlalchemy-session-learning.md
+8. sqlalchemy-session-learning.md
    理解 engine、SessionLocal、Session、Model、select、flush、commit。
 
-8. config-and-runtime-learning.md
+9. config-and-runtime-learning.md
    理解环境变量、运行时目录和配置边界。
 
-9. text-chunking-learning.md
+10. text-chunking-learning.md
    理解为什么要把文档切成 chunk/paragraph，以及 chunk_size、overlap 的影响。
 
-10. embedding-learning.md
+11. embedding-learning.md
    理解文本向量是什么，以及本项目的 HashEmbeddingService。
 
-11. chromadb-learning.md
+12. chromadb-learning.md
    理解本地 Chroma 实现、collection、metadata、distance 和 score。
 
-12. retrieval-flow-learning.md
+13. retrieval-flow-learning.md
     理解三种检索模式如何形成统一候选并回到业务段落。
 
-13. problem-enhancement-learning.md
+14. problem-enhancement-learning.md
     理解问题向量如何通过 Mapping 回到原始段落。
 
-14. hybrid-retrieval-learning.md
+15. hybrid-retrieval-learning.md
     理解向量检索、关键词检索和 weighted RRF。
 
-15. database-migration-pgvector-learning.md
+16. database-migration-pgvector-learning.md
     理解 Alembic、PostgreSQL、pgvector、tsvector 和 Repository。
 
-16. async-task-outbox-learning.md
+17. async-task-outbox-learning.md
     理解 Celery、Redis、Transactional Outbox、幂等、租约和重试。
 ```
 
@@ -71,6 +74,9 @@ db、embedding_service、vector_store 这些依赖是谁创建和传入的？
 
 pydantic-schema-learning.md
 接口请求和响应为什么需要 Schema？
+
+langchain-openai-pydantic-learning.md
+Agent 脚本里 langchain_openai、pydantic、dotenv 分别负责什么？
 
 database-orm-basics-learning.md
 当前 11 张表如何对应 ORM 模型、字段和关系？
@@ -208,6 +214,7 @@ project-layering-learning.md
 fastapi-api-learning.md
 fastapi-dependency-learning.md
 pydantic-schema-learning.md
+langchain-openai-pydantic-learning.md
 database-orm-basics-learning.md
 sqlalchemy-session-learning.md
 config-and-runtime-learning.md
