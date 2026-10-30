@@ -71,7 +71,7 @@ OPENAI_BASE_URL=https://your-compatible-endpoint/v1
 
 ## 3. 学习路径总览
 
-建议按 6 个阶段推进，每个阶段都做一个小项目。
+建议按 8 个阶段推进，每个阶段都做一个小项目。
 
 | 阶段 | 主题 | 项目 |
 | --- | --- | --- |
@@ -81,6 +81,8 @@ OPENAI_BASE_URL=https://your-compatible-endpoint/v1
 | 第 4 阶段 | RAG | 团队知识库问答 |
 | 第 5 阶段 | LangGraph | Bug 排障 Agent |
 | 第 6 阶段 | 生产化 | 可观测 Agent API 服务 |
+| 第 7 阶段 | Agent Harness | 可恢复、可追踪的工具型 Agent |
+| 第 8 阶段 | Eval / Safety / 交付 | 可写进简历的 Agent 项目 |
 
 ## 4. 第 1 阶段：LLM 调用与 Prompt
 
@@ -687,7 +689,7 @@ curl -X POST http://127.0.0.1:8000/chat \
 - Review 规则
 - Eval 测试集
 
-## 12. 4 周学习计划
+## 12. 5 周学习计划
 
 ### 第 1 周：Python 与 LangChain 基础
 
@@ -749,6 +751,22 @@ curl -X POST http://127.0.0.1:8000/chat \
 - Agent 过程可追踪。
 - 信息不足时会追问。
 
+### 第 5 周：Agent Harness 与项目交付
+
+目标：
+
+- 理解 `Model + Harness` 的关系。
+- 给 Agent 增加 trace、权限、成本上限和失败归因。
+- 设计 10-20 条 EvalCase，覆盖正常、边界、失败和安全场景。
+- 完成一个别人能按 README 跑通的最小 Agent 项目。
+
+验收标准：
+
+- 每次运行都有 `trace_id`、工具调用记录、耗时和失败原因。
+- 读操作可自动执行，写操作需要 dry-run 和人工确认。
+- Eval 能发现历史失败案例，不能只靠手动试一下。
+- README 能说明目标用户、核心流程、运行方式、限制和评测结果。
+
 ## 13. 必须补齐的 Python 能力
 
 你不需要先成为 Python 专家，但这些能力必须掌握：
@@ -776,7 +794,190 @@ Python 基础语法
   -> asyncio 异步任务
 ```
 
-## 14. Agent 工程能力清单
+### 13.1 常用基类速查
+
+Python 里这种写法：
+
+```python
+class FileItem(BaseModel):
+    ...
+```
+
+表示“定义一个类，并继承某个基类”。Agent 开发里常见的基类主要有：
+
+| 基类 | 来自 | 常见用途 |
+| --- | --- | --- |
+| `BaseModel` | `pydantic` | 定义结构化数据、工具参数、API 请求响应，并做字段校验 |
+| `BaseSettings` | `pydantic-settings` | 定义环境变量配置模型 |
+| `TypedDict` | `typing` | 定义状态字典结构，LangGraph 的 `State` 很常用 |
+| `Enum` | `enum` | 定义固定选项，例如任务状态、工具类型、错误码 |
+| `ABC` | `abc` | 定义抽象基类，约束子类必须实现某些方法 |
+| `Protocol` | `typing` | 定义“只要长得像就能用”的接口约束 |
+| `Exception` | 内置 | 定义自定义异常 |
+| `DeclarativeBase` | `sqlalchemy.orm` | 定义 SQLAlchemy ORM 模型基类 |
+| `TestCase` | `unittest` | 定义单元测试类；实际项目也常直接用 `pytest` 函数风格 |
+
+优先掌握这几类：
+
+```txt
+BaseModel -> 结构化数据和校验
+TypedDict -> LangGraph 状态
+Enum -> 固定状态和类型
+Exception -> 明确错误类型
+DeclarativeBase -> 数据库模型
+```
+
+## 14. AgentGuide 补充：Agent 开发必备知识图谱
+
+参考 [AgentGuide](https://github.com/adongwanai/AgentGuide) 的学习地图、求职路线、Agent Harness、上下文工程、Memory、Eval 和安全文档后，开发岗学习重点可以压缩成下面这张知识图谱。
+
+### 14.1 先判断是不是必须用 Agent
+
+| 形态 | 核心特征 | 什么时候用 |
+| --- | --- | --- |
+| Chatbot | 主要输出文本 | 只需要问答，不需要行动 |
+| Workflow | 固定步骤，LLM 只是其中一环 | 流程清晰、分支有限、成功标准明确 |
+| Agent | 模型根据状态选择下一步动作 | 任务开放，需要多步探索和工具调用 |
+| Multi-Agent | 多角色分工协作 | 子任务能相对独立完成，最后汇总结果 |
+| Computer-Use Agent | 操作浏览器、终端、文件系统 | 任务必须进入真实软件环境 |
+
+优先原则：能用 workflow 解决就不要急着上 Agent；能用单 Agent 解决就不要急着上 Multi-Agent。
+
+### 14.2 Agent 的 7 个核心模块
+
+| 模块 | 要回答的问题 |
+| --- | --- |
+| Goal | 成功标准是什么，失败边界是什么 |
+| State | 当前任务状态、历史和中间结果放在哪里 |
+| Context | 哪些信息进入模型，顺序和格式是什么 |
+| Tools | 有哪些工具，schema、权限和错误如何表达 |
+| Loop | 最大步数、停止条件、重试和恢复怎么设计 |
+| Guardrails | 哪些动作需要确认，哪些输入不可信 |
+| Eval | 怎么证明它真的完成了任务 |
+
+你写的每个练习脚本，都可以按这 7 个模块反查缺口。
+
+### 14.3 Agent Harness：模型之外的工程主体
+
+Agent 可以理解为：
+
+```txt
+Agent = Model + Harness
+```
+
+模型负责理解、推理和生成；Harness 负责工具、上下文、权限、状态、日志、回放、评测和人类反馈。
+
+AgentGuide 里把 Harness 拆成 7 层：
+
+| 层级 | 职责 | 当前优先级 |
+| --- | --- | --- |
+| L1 模型层 | 统一模型调用、记录 token 和延迟 | 必学 |
+| L2 循环层 | 最大步数、停止条件、工具结果回写 | 必学 |
+| L3 工具层 | 工具注册、schema、错误、权限 | 必学 |
+| L4 记忆层 | working / episodic / semantic memory | 第二阶段 |
+| L5 人格/策略层 | 项目规则、安全策略、输出风格 | 第二阶段 |
+| L6 通道层 | CLI / Web / IM / 定时任务入口 | 有项目后再学 |
+| L7 自驱层 | heartbeat / cron / queue worker | 后置 |
+
+第一个月只需要重点跑通 L1-L3；不要过早做自驱、复杂多 Agent 或大而全平台。
+
+### 14.4 Context Engineering：控制信息如何进入模型
+
+Prompt 只是上下文的一部分。真正要管理的是模型在一次决策前看到的所有信息：
+
+- system 指令和项目规则。
+- 当前用户任务。
+- 短期对话和最近 trace。
+- 长期记忆和用户偏好。
+- RAG 检索证据。
+- 可用工具定义。
+- 结构化输出格式。
+
+常用方法：
+
+| 方法 | 作用 |
+| --- | --- |
+| Offload | 把长内容放到文件、数据库或状态对象里，只给模型引用和摘要 |
+| Retrieve | 只检索当前任务相关的信息 |
+| Reduce | 压缩、裁剪、去重，避免上下文污染 |
+| Isolate | 子任务隔离处理，避免无关信息互相干扰 |
+
+练习要求：后续每个 Agent 都要有一个显式的 `build_context(...)` 或等价逻辑，而不是把所有历史直接塞给模型。
+
+### 14.5 Tool Engineering：工具要为模型设计
+
+工具不是普通 API 的简单暴露，而是给模型使用的行动接口。
+
+最小标准：
+
+- 工具名语义互斥，不要同时出现 `search_docs` 和 `find_docs` 这类近义工具。
+- 入参用 Pydantic / JSON Schema 做严格校验。
+- 返回结构要短、清晰、可继续推理，必要时分页、截断、附来源。
+- 错误要返回可恢复信息，例如 `INVALID_ARGS`、`TIMEOUT`、`NOT_FOUND`。
+- 高风险工具必须带 `requires_confirmation` 或权限等级。
+- 每次工具调用都记录参数、结果摘要、耗时和错误。
+
+当前练习中的 `run_tool_call` 就是工具调度器雏形，后续重点是把错误、权限和 trace 补完整。
+
+### 14.6 Memory：先分层，再存储
+
+| 类型 | 存什么 | 初学实现 |
+| --- | --- | --- |
+| Working memory | 当前任务短期状态 | messages / state dict |
+| Episodic memory | 过去发生过什么 | JSONL / SQLite |
+| Semantic memory | 用户偏好、长期知识 | 向量库 / hybrid search |
+
+不要一上来就引入复杂 Memory 框架。个人项目先用 JSONL 或 SQLite 记录关键事实，等出现跨会话召回需求后再上向量库。
+
+### 14.7 Eval：不要只看最终回答
+
+Agent Eval 至少要看两类东西：
+
+- `Transcript`：模型想了什么、调用了什么工具、走了几步。
+- `Outcome`：真实环境有没有发生正确变化，比如文件、数据库、消息是否真的符合预期。
+
+EvalCase 建议字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `task_id` | 任务编号 |
+| `input` | 用户输入 |
+| `expected` | 期望行为 |
+| `forbidden` | 禁止行为 |
+| `grader` | 规则断言、代码评分或人工评分方式 |
+| `failure_type` | 工具选错、上下文污染、权限问题、模型误判等 |
+
+至少准备 10-20 条：正常任务、边界任务、工具失败、检索为空、prompt injection、高风险动作。
+
+### 14.8 Safety：模型可以建议，系统负责授权
+
+Agent 安全不能只靠 prompt。
+
+最小安全清单：
+
+- 外部网页、PDF、邮件、工具返回都视为不可信数据。
+- 工具 allowlist，禁止模型临时发明工具。
+- 权限分级：读自动，写 dry-run + 人审，不可逆操作默认禁止或强确认。
+- path / domain allowlist，避免越权读写和访问未知站点。
+- secrets 只在工具执行层读取，trace 和最终答案都要脱敏。
+- 安全 Eval 覆盖 system prompt 泄漏、`.env` 读取、自动付款、删除文件等场景。
+
+核心句：工具结果是数据，不是指令；模型可以提出动作，确定性代码负责授权和执行。
+
+### 14.9 简历级项目交付标准
+
+一个能写进简历的 Agent 项目，至少要有：
+
+- 明确用户和任务，不是泛泛的“智能助手”。
+- 可运行入口，别人能按 README 跑起来。
+- 清晰的 agent loop、工具注册、context builder、权限边界。
+- trace 或日志，失败后能定位问题。
+- eval case，能说明通过率、失败类型、成本和延迟。
+- 复盘：为什么这样设计，替代方案是什么，哪些机制真的带来提升。
+
+简历表达不要写“基于大模型实现智能问答”，而要写清楚：架构、业务场景、工具、上下文管理、权限、评测结果和失败归因。
+
+## 15. Agent 工程能力清单
 
 ### LLM 基础
 
@@ -812,7 +1013,7 @@ Python 基础语法
 - 会做权限边界。
 - 会做 Eval 回归。
 
-## 15. 常见误区
+## 16. 常见误区
 
 ### 误区 1：只写 Prompt
 
@@ -854,7 +1055,7 @@ Agent 不稳定，必须有测试集。
 - 错误信息
 - 可取消、可重试、可确认操作
 
-## 16. 最终路线图
+## 17. 最终路线图
 
 ```txt
 Python 基础
@@ -875,13 +1076,16 @@ LangGraph：状态机、多步骤 Agent、条件分支
 FastAPI：把 Agent 封装成服务
   |
   v
-Trace / Eval / 权限 / 人工确认
+Agent Harness：工具 / 状态 / 上下文 / Trace
+  |
+  v
+Eval / Safety / 权限 / 人工确认
   |
   v
 Agent 开发工程师
 ```
 
-## 17. 你的下一步
+## 18. 你的下一步
 
 建议直接从这个最小目录开始：
 
@@ -928,7 +1132,7 @@ pytest
 
 这些脚本跑通并完成改造练习后，你就已经从“会调模型”进入“会构建 Agent 工作流”的门槛。
 
-## 18. 7 天实践强化路线
+## 19. 7 天实践强化路线
 
 如果目标是尽快达到 Agent 初级开发水平，建议按下面节奏练。每天都必须跑代码、改代码、做验收。
 
@@ -1087,7 +1291,7 @@ python 08_human_approval_file_writer.py
 - 能实现“先生成计划，再人工确认，再执行”的流程。
 - 能限制文件写入范围。
 
-## 19. 初级 Agent 开发最低能力清单
+## 20. 初级 Agent 开发最低能力清单
 
 完成上面练习后，你至少应该能独立完成：
 

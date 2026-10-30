@@ -19,6 +19,20 @@
 
 学习过程中的每日理解、企业场景判断和项目复盘统一记录到 `learning_notes/`。
 
+每日拆解目标见：
+
+- `agent_development_daily_goals.md`
+
+面试增强版 8 周计划见：
+
+- `agent_development_interview_enhanced_8_week_plan.md`
+
+前 15 天课程与代码详解见：
+
+- `agent_development_daily_course_and_code.md`
+
+当前不需要新建文件夹，路线文档继续放在 `docs/roadmaps/`，每日笔记继续放在 `docs/notes/learning_notes/daily/`。
+
 ## 学习链接索引
 
 - AgentGuide：https://github.com/adongwanai/AgentGuide

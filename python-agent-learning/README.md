@@ -10,6 +10,21 @@
 6. FastAPI Agent 服务：`06_agent_api.py`
 7. Eval 回归评估：`07_eval_regression.py`
 8. 人工确认写文件：`08_human_approval_file_writer.py`
+9. 手写最小 Agent Loop：`09_requirement_agent_loop.py`
+10. 工具化需求 Agent：`10_requirement_tool_agent.py`
+
+前 15 天的配套小 Demo 位于 `demos/`：
+
+- `day01_task_boundary_demo.py`：判断 Chatbot、Workflow、Agent 边界。
+- `day04_schema_design_demo.py`：设计结构化需求字段。
+- `day05_output_validation_demo.py`：区分结构校验和业务校验。
+- `day06_requirement_cases_demo.py`：准备需求样例和检查规则。
+- `day07_week_review_demo.py`：生成第一周复盘摘要。
+- `day09_nested_model_demo.py`：练习嵌套 Pydantic 模型。
+- `day11_quality_score_demo.py`：对结构化输出做人工质量评分。
+- `day12_cross_field_validation_demo.py`：执行跨字段业务校验。
+- `day13_layered_validation_demo.py`：练习分层校验。
+- `day15_tool_dispatch_demo.py`：演示 Tool Calling 请求和程序执行的边界。
 
 ## 当前环境
 
@@ -87,6 +102,7 @@ python 03_tool_calling.py
 python 04_rag_qa.py --no-model "Button 有哪些类型？"
 python 05_langgraph_bug_agent.py "点击保存后按钮一直 loading，接口实际已经返回 200。"
 python 07_eval_regression.py
+python 09_requirement_agent_loop.py
 pytest -q
 ```
 

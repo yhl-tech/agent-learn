@@ -23,6 +23,9 @@
 6. langchain-openai-pydantic-learning.md
    理解 Agent 脚本中 langchain_openai、pydantic、dotenv 的职责。
 
+补充速查：python-agent-rag-basics-summary.md
+   回顾 Python 类型标注、Pydantic、常用基类、metadata、chunk、Top-K 和召回率。
+
 7. database-orm-basics-learning.md
    理解表、行、字段如何映射为 ORM 模型类、属性和实例。
 
@@ -77,6 +80,9 @@ pydantic-schema-learning.md
 
 langchain-openai-pydantic-learning.md
 Agent 脚本里 langchain_openai、pydantic、dotenv 分别负责什么？
+
+python-agent-rag-basics-summary.md
+Python Agent 入门脚本里常见语法和 RAG 检索参数分别是什么意思？
 
 database-orm-basics-learning.md
 当前 11 张表如何对应 ORM 模型、字段和关系？
