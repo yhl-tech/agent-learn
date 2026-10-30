@@ -29,6 +29,8 @@ def classify_task(task: str) -> TaskType:
 
     # 解释、总结、翻译通常是一次输入对应一次文本输出，
     # 不需要模型选择工具或维护多步状态，所以归为 Chatbot。
+    # 依次检查三个关键词是否出现在已经清理过的任务描述中。
+    # any 只要发现一个关键词命中，就返回 True，进入 Chatbot 分类。
     if any(keyword in normalized_task for keyword in ("解释", "总结", "翻译")):
         return "chatbot"
 
