@@ -1,0 +1,21 @@
+python-agent-learning/docs/interview/2026-11-11.md
+  s_ab33a1b5c98f95::t_33022e8bff3565 1-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "75dfe98bec6cfb2a9d6046c90bf3e1986884cb0e",
+  "prompts": {},
+  "sessions": {
+    "s_ab33a1b5c98f95": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_ab33a1b5c98f95",
+        "model": "unknown"
+      },
+      "human_author": "yhl-tech <55943973+yhl-tech@users.noreply.github.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
